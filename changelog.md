@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.3
-changelog_version: 1.0.4
+changelog_version: 1.0.5
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,24 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #006 — Test Coverage: Transcribe Proxy & Auth Lockout
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Add test coverage for the existing `/api/transcribe` proxy and the `checkAuth` lockout mechanism (both already implemented).
-- **Files to create / modify:** `worker.js`, `test/worker.test.js`
-- **Acceptance criteria:**
-  - [ ] Test confirms a missing `GROQ_API_KEY` returns a clear 500, not an unhandled error
-  - [ ] Test confirms 3 failed Basic Auth attempts from the same simulated IP cause the 4th request to receive 429, and that a successful login resets the counter
-  - [ ] Unit test written and passing for new logic
-  - [ ] Test is isolated: sets up and tears down its own state (KV state reset between tests)
-- **Dependencies:** Task #001
-- **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #007 — Frontend: Audio Capture Module
 - **Phase:** Phase 3 — Core Features
@@ -40,6 +22,12 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #001
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #008 — Frontend: Config Module & Context Upload (5,000-char cap)
 - **Phase:** Phase 3 — Core Features
@@ -322,3 +310,27 @@ simple_mode: true
   - [API] 429-specific behaviour deliberately NOT covered here (statuses used: 500/503) — that is Task #014's exact scope; forced-provider and invalid-provider coverage added as part of "comprehensive tests" since no task owns them.
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. No runtime change, so no new knowledge contract to document.
 - **Knowledge drift:** none — no new library (§2), naming/test isolation per §4, no new module (§3), no API or error-contract change (§5), no infra change (§8).
+
+### Task #006 — Test Coverage: Transcribe Proxy & Auth Lockout ✅
+- **Completed:** 2026-09-25
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-006-transcribe-lockout-tests
+- **Files created / modified:**
+  - `test/worker.test.js` — 3 new tests: missing `GROQ_API_KEY` → 500 naming the variable with zero outbound calls; 3 wrong-cred POSTs from `CF-Connecting-IP: 203.0.113.9` → 401 each and KV `authfail:203.0.113.9` = `'3'`, 4th request with **correct** creds → 429 + `Retry-After: 900` (counter unchanged); same IP: 2 failures → KV `'2'`, successful GET `/` → 200 + KV `null`, next failure → KV `'1'`
+  - `worker.js` — **unchanged**: all three acceptance paths behaved per knowledge §5; no bug surfaced (mutation checks below confirmed the tests would catch one)
+- **Acceptance criteria met:**
+  - [x] Test confirms a missing `GROQ_API_KEY` returns a clear 500 naming the variable, not an unhandled error (key check fires before `formData()` — bodyless request proves no parse throw escapes; `outboundCalls` empty)
+  - [x] Test confirms 3 failed Basic Auth attempts from the same simulated IP cause the 4th request to receive 429 even with correct credentials, and that a successful login resets the counter (`'2'` → `null` → next failure `'1'`)
+  - [x] Unit test written and passing for new logic (3 tests)
+  - [x] Test is isolated: sets up and tears down its own state — fetch swap in `beforeEach`/restored in `afterEach`, KV `authfail:*` key deleted in `afterEach`; the reset test starts with `toBeNull()` on the **same** key the lockout test used, so stale state from the previous test would fail it
+- **Security gate:** STANDARD — HIGH-RISK OVERRIDE (auth scope): all checks passed [— Phase 3 STANDARD raised by override; simple_mode: 0 items skipped]
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Regression:** Passed 23 (20 baseline + 3 new), 0 failed (`npm test` → `vitest run`, 1.39s); pre-commit hook re-verified this task (staged `.dev.vars` → exit 1)
+- **Decisions made:**
+  - [TEST] Lockout tests drive the **real `AUTH_KV` binding** from `cloudflare:test` (placeholder id works under miniflare) rather than a fake KV — the KV contract itself (`get`/`put` w/ `expirationTtl`/`delete`) is under test, and the scenario would silently pass against a too-faithful mock. `env` added to the existing `cloudflare:test` import.
+  - [TEST] Both lockout tests deliberately share one IP + `afterEach` KV delete + starting `toBeNull()` assert — makes the isolation criterion self-proving instead of claimed.
+  - [TEST] Mutation verification, one per test: `MAX_AUTH_FAILURES` 3→999 → lockout test failed; counter-reset `delete` removed → reset test failed; GROQ 500 block removed → transcribe test failed (would otherwise throw at `formData()`); each mutation reverted individually, suite green after restore.
+  - [PATTERN] Synthetic `worker.fetch(request, env)` pattern from #003 reused for per-test env; `globalThis.fetch` swap from #005 reused as `disableNetConnect` — no new test infrastructure.
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. ESLint still absent (pre-existing, recorded in #003). KV `expirationTtl` unit (900s) asserted via `Retry-After` header rather than TTL introspection — miniflare clock not advanced.
+- **Knowledge drift:** none — lockout contract documented in §5 already (429 even with correct creds, 15-min TTL); no new library (§2), module (§3), API (§5), or infra change (§8).
