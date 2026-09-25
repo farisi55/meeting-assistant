@@ -10,3 +10,6 @@ secrets/
 *.log
 .DS_Store
 coverage/
+.vscode/
+.kiln/
+.githooks/

@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.4
-changelog_version: 1.0.9
+changelog_version: 1.0.10
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,6 +10,26 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
+
+#### Task #010A — Auth: Bearer Token (BASIC_AUTH_TOKEN) Replacing Basic User/Pass
+- **Phase:** Phase 3 — Core Features
+- **Scope:** Replace Basic user/pass auth with a single high-entropy bearer secret: client sends `Authorization: Bearer <UUID token>`, Worker verifies against `BASIC_AUTH_TOKEN` using constant-time comparison; reuse the existing KV lockout (3 gagal/IP, 15 menit) and the fail-fast config pattern; `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` removed from code, tests, and docs. Out-of-band insertion requested by developer, ordered before #011.
+- **Files to create / modify:** `worker.js`, `test/worker.test.js`, `public/providers.js`, `test/frontend/providers.test.js`, `vitest.worker.config.js`, `.dev.vars.example`, `wrangler.toml`, `README.md`, `knowledge.md`
+- **Acceptance criteria:**
+  - [ ] Correct `Authorization: Bearer <token>` passes auth when `AUTH_ENABLED=true`; missing/wrong token → 401, and wrong attempts feed the same lockout counter (4th wrong → 429 via KV; a passing request clears it)
+  - [ ] `AUTH_ENABLED=true` without `BASIC_AUTH_TOKEN` → fail-fast 500 naming `BASIC_AUTH_TOKEN`; `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` appear nowhere in code or test config (grep-clean)
+  - [ ] Token comparison uses constant-time comparison (`crypto.subtle.timingSafeEqual`); @knowledge §5 (auth contract) + §8 (env vars) + §9 (secret-comparison policy) updated this task
+  - [ ] Frontend stays usable with auth enabled: `providers.js` attaches a stored token from localStorage as `Authorization: Bearer` when configured
+  - [ ] Unit tests written and passing (worker auth/lockout/fail-fast + providers header attach), hermetic bindings updated, test isolated
+  - [ ] `.dev.vars.example`, `wrangler.toml` comments, and `README.md` show only the token scheme (no stale Basic-auth instructions)
+- **Dependencies:** Task #003, Task #006, Task #009
+- **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #011 — Feature: Interview-Practice Mode
 - **Phase:** Phase 3 — Core Features
@@ -22,12 +42,6 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #008, Task #009
 - **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #012 — Audio → Transcript → Response Pipeline Wiring
 - **Phase:** Phase 3 — Core Features
