@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.3
-changelog_version: 1.0.5
+changelog_version: 1.0.6
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,24 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #007 — Frontend: Audio Capture Module
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Implement `public/audio-capture.js` — mic (`getUserMedia`) and system-audio (`getDisplayMedia`) capture, chunking, and explicit handling for a missing audio track or an `ended` track event, per @knowledge §9's documented browser limitations.
-- **Files to create / modify:** `public/audio-capture.js`
-- **Acceptance criteria:**
-  - [ ] Starting mic capture and starting a display-media share each expose a usable `MediaStream` via the module's API
-  - [ ] A `getDisplayMedia` stream with zero audio tracks triggers a distinct, catchable error rather than failing silently
-  - [ ] Unit test written and passing for new logic (pure logic — track-presence check, `ended` handling — tested with mocked `MediaStream`/track objects, under the node/jsdom Vitest project)
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #001
-- **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #008 — Frontend: Config Module & Context Upload (5,000-char cap)
 - **Phase:** Phase 3 — Core Features
@@ -40,6 +22,12 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state (localStorage cleared between tests)
 - **Dependencies:** Task #001
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #009 — Frontend: Providers Client Helper
 - **Phase:** Phase 3 — Core Features
@@ -334,3 +322,27 @@ simple_mode: true
   - [PATTERN] Synthetic `worker.fetch(request, env)` pattern from #003 reused for per-test env; `globalThis.fetch` swap from #005 reused as `disableNetConnect` — no new test infrastructure.
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. ESLint still absent (pre-existing, recorded in #003). KV `expirationTtl` unit (900s) asserted via `Retry-After` header rather than TTL introspection — miniflare clock not advanced.
 - **Knowledge drift:** none — lockout contract documented in §5 already (429 even with correct creds, 15-min TTL); no new library (§2), module (§3), API (§5), or infra change (§8).
+
+### Task #007 — Frontend: Audio Capture Module ✅
+- **Completed:** 2026-09-25
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-007-audio-capture-module
+- **Files created / modified:**
+  - `public/audio-capture.js` — **created**: ES module with `AudioCaptureError` (stable codes `NO_AUDIO_TRACK`, `MEDIA_UNAVAILABLE`, `RECORDER_UNAVAILABLE`), `assertHasAudioTrack`, `startMicCapture` (getUserMedia), `startDisplayCapture` (getDisplayMedia, rejects + cleans up on zero audio tracks), `watchTrackEnded` (→ unsubscribe fn), `stopStream`, `startChunkedRecording` (MediaRecorder timeslice → `stop()` resolves non-empty chunks); no module-level state
+  - `test/frontend/audio-capture.test.js` — **created**: 10 tests under the node/jsdom Vitest project — stream exposure (mic/display), zero-audio distinct error + track cleanup, missing mediaDevices catchable error, track-presence assert, `ended` event fire + unsubscribe, chunk collection (empty filtered, final chunk on stop), timeslice/stream binding, stopStream, error-class contract
+- **Acceptance criteria met:**
+  - [x] Mic capture and display-media share each expose a usable `MediaStream` via the module's API (stubbed `navigator.mediaDevices`, stream identity asserted)
+  - [x] Zero-audio-track `getDisplayMedia` stream triggers a distinct, catchable error (`AudioCaptureError` / `NO_AUDIO_TRACK`, not a TypeError or silent failure) and stops the leftover video track (no leaked stream)
+  - [x] Unit test written and passing for new logic (10 tests, mocked `MediaStream`/`MediaRecorder`/`EventTarget` objects — no capture devices required)
+  - [x] Test is isolated: fresh mock streams/track objects per test; `navigator.mediaDevices` stub restored in `afterEach` (original descriptor captured, `delete` when absent); module itself holds no module-level mutable state
+- **Security gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Regression:** Passed 33 (23 baseline + 10 new), 0 failed (`npm test` → `vitest run`, 1.74s); `node --check public/audio-capture.js` OK; pre-commit hook re-verified (staged `.dev.vars` → exit 1)
+- **Decisions made:**
+  - [PATTERN] Typed `AudioCaptureError` with stable machine-readable `code` instead of generic `Error`/`TypeError` — turns the "distinct, catchable" criterion into a contract the UI layer (#011) can branch on (`NO_AUDIO_TRACK` → surface §9 browser-limitation hint) rather than string-matching messages
+  - [TEST] `startChunkedRecording` takes an injectable `Recorder` option (default `globalThis.MediaRecorder`) so chunk logic runs in jsdom without real capture devices; `navigator.mediaDevices` stubbed per test with descriptor restore — same isolation discipline as #005/#006
+  - [ARCH] Chunks buffered in memory until `stop()` resolves — bounded by the user-controlled recording session (personal-use MVP, 1 user, §4 coverage/scale targets); streaming upload cadence is deliberately deferred to #011's wiring decision
+  - [TEST] Mutation verification, one per core behavior: disabled `assertHasAudioTrack`'s throw → exactly the 2 track-presence tests failed; removed the `ended` listener registration → exactly the `watchTrackEnded` test failed; each reverted individually, 33/33 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Top-level `public/` folder materialized for the first time — `wrangler.toml [assets] directory = "./public"` now resolves (it pointed at a non-existent folder until this task); no drift since §3:56–62 already documented it. **Observation for developer:** no task in [NEXT TASKS] lists `public/index.html`/`public/styles.css` even though §3 documents them — flag before #016 E2E.
+- **Knowledge drift:** none — module path/purpose matches §3 tree exactly (incl. §3:60 `audio-capture.js`); §9 `getDisplayMedia` limitation surfaced as the `NO_AUDIO_TRACK` contract, not new knowledge; no new library (§2), API (§5), infra (§8), or delete-strategy (§7) change.
