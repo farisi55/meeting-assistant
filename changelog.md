@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.3
-changelog_version: 1.0.6
+changelog_version: 1.0.7
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,24 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #008 — Frontend: Config Module & Context Upload (5,000-char cap)
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Implement `public/config.js` (exports `MAX_CONTEXT_CHARS = 5000`) and the CV/job-description/product-knowledge upload UI, persisting to `localStorage` and enforcing the character cap client-side per @knowledge §7.
-- **Files to create / modify:** `public/config.js`, `public/app.js`
-- **Acceptance criteria:**
-  - [ ] Entering context text over `MAX_CONTEXT_CHARS` shows a visible validation message and blocks submission
-  - [ ] Context text persists in `localStorage` across a page reload
-  - [ ] Unit test written and passing for new logic
-  - [ ] Test is isolated: sets up and tears down its own state (localStorage cleared between tests)
-- **Dependencies:** Task #001
-- **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #009 — Frontend: Providers Client Helper
 - **Phase:** Phase 3 — Core Features
@@ -40,6 +22,12 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #001
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #010 — Feature: "Steer AI" Response Drafting Mode
 - **Phase:** Phase 3 — Core Features
@@ -346,3 +334,29 @@ simple_mode: true
   - [TEST] Mutation verification, one per core behavior: disabled `assertHasAudioTrack`'s throw → exactly the 2 track-presence tests failed; removed the `ended` listener registration → exactly the `watchTrackEnded` test failed; each reverted individually, 33/33 green after restore
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Top-level `public/` folder materialized for the first time — `wrangler.toml [assets] directory = "./public"` now resolves (it pointed at a non-existent folder until this task); no drift since §3:56–62 already documented it. **Observation for developer:** no task in [NEXT TASKS] lists `public/index.html`/`public/styles.css` even though §3 documents them — flag before #016 E2E.
 - **Knowledge drift:** none — module path/purpose matches §3 tree exactly (incl. §3:60 `audio-capture.js`); §9 `getDisplayMedia` limitation surfaced as the `NO_AUDIO_TRACK` contract, not new knowledge; no new library (§2), API (§5), infra (§8), or delete-strategy (§7) change.
+
+### Task #008 — Frontend: Config Module & Context Upload (5,000-char cap) ✅
+- **Completed:** 2026-09-25
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-008-config-context-upload
+- **Files created / modified:**
+  - `public/config.js` — **created**: exports `MAX_CONTEXT_CHARS = 5000` (knowledge §7: cap lives in one configurable place)
+  - `public/app.js` — **created**: side-effect-free UI entry point — `CONTEXT_FIELDS` (CV / Deskripsi Pekerjaan / Pengetahuan Produk), `validateContextField`, `loadContext` (corrupted-storage tolerant), `saveContext` (all-or-nothing cap enforcement), `mountContextPanel` (textareas + per-field `role="alert"` messages + save/status), `initApp` bootstrap
+  - `test/frontend/context-upload.test.js` — **created**: 10 tests — cap boundary (5000 ok / 5001 rejected), blocked-save writes nothing, save→load round-trip, empty+corrupted+partial storage tolerance, visible over-cap message + save blocked, persistence across simulated reload, field/label/error rendering, destroy(), initApp mount + missing-root error
+- **Acceptance criteria met:**
+  - [x] Text over `MAX_CONTEXT_CHARS` shows a visible validation message (per-field `role="alert"`, `hidden=false`, message includes the 5000 cap) and blocks submission (save click → nothing written, no "Tersimpan" status)
+  - [x] Context text persists in `localStorage` across a page reload (fresh `mountContextPanel` on the same storage repopulates every textarea — simulated reload asserted)
+  - [x] Unit test written and passing for new logic (10 tests)
+  - [x] Test is isolated: `localStorage.clear()` in both `beforeEach` and `afterEach`; fresh `root` element per test, removed in `afterEach`
+- **Security gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Regression:** Passed 43 (33 baseline + 10 new), 0 failed (`npm test` → `vitest run`, 1.98s); `node --check` on both new files OK; pre-commit hook re-verified (staged `.dev.vars` → exit 1)
+- **Decisions made:**
+  - [PATTERN] All-or-nothing save: any over-cap field blocks the entire write (no partial persistence) — makes "blocks submission" testable as `localStorage` untouched, and prevents a half-saved context from being mistaken for a complete one
+  - [PATTERN] `public/app.js` kept side-effect free (no top-level DOM access): browser bootstraps via explicit `initApp()`, tests mount panels directly — importing the entry module never mutates a page (also required for #010–#013/#015 which will import from it)
+  - [ARCH] "Upload UI" implemented as paste-in textareas per field, not file inputs: knowledge §7 governs "context text" and all four acceptance criteria are text-based; a FileReader import path adds async surface with zero acceptance coverage — deferred unless requested
+  - [PATTERN] `localStorage` holds context text (CV/JD/product knowledge), never tokens/credentials — §9's "plain local storage" ban targets secrets; §3 explicitly prescribes localStorage for client-side state
+  - [TEST] Mutation verification: bypassed `saveContext`'s cap check → exactly the 2 blocked-save tests failed; skipped restore-on-mount population → exactly the persistence test failed; each reverted individually, 43/43 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. First task modifying `public/app.js` — forward impact: #010, #011, #012, #015 also modify it (tracked, intentional). UI text is Indonesian, consistent with `worker.js` response messages. The #007 note stands: no tracker task creates `public/index.html`/`public/styles.css`.
+- **Knowledge drift:** none — cap constant + client-side validation + localStorage persistence are verbatim §7 rules; module paths per §3; no new library (§2), naming per §4 (kebab-case files, camelCase functions, one-line comments on every export), no API (§5), infra (§8), or delete (§7) change.
