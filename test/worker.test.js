@@ -1,4 +1,4 @@
-import { SELF } from 'cloudflare:test';
+import { env, SELF } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import worker, { authConfigError } from '../worker.js';
 
@@ -240,5 +240,97 @@ describe('chat provider fallback chain (Task #005)', () => {
     expect(res.status).toBe(500);
     expect(await res.text()).toContain('Tidak ada provider');
     expect(outboundCalls).toEqual([]);
+  });
+});
+
+describe('transcribe proxy & auth lockout (Task #006)', () => {
+  // Kedua test lockout sengaja memakai IP yang sama: test kedua memulai
+  // dengan assert key KV sudah null — sekaligus membuktikan state test
+  // sebelumnya benar-benar ditebas di afterEach (isolated, lihat kriteria).
+  const IP = '203.0.113.9';
+  const LOCK_KEY = `authfail:${IP}`;
+  const USER = 'test-user';
+  const PASS = 's3cr3t-pass';
+
+  let originalFetch;
+  let outboundCalls;
+
+  const authHeaders = (pass, ip = IP) => ({
+    'CF-Connecting-IP': ip,
+    Authorization: `Basic ${btoa(`${USER}:${pass}`)}`,
+  });
+
+  const post = (path, headers) =>
+    new Request(`https://example.com${path}`, { method: 'POST', headers });
+
+  // Env sintetis per test; AUTH_KV memakai binding KV asli dari runtime
+  // supaya mekanisme lockout diuji apa adanya, bukan terhadap tiruan.
+  const makeEnv = (overrides = {}) => ({
+    AUTH_ENABLED: 'true',
+    BASIC_AUTH_USER: USER,
+    BASIC_AUTH_PASS: PASS,
+    AUTH_KV: env.AUTH_KV,
+    ASSETS: { fetch: async () => new Response('asset-ok') },
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    outboundCalls = [];
+    globalThis.fetch = async (url) => {
+      outboundCalls.push(String(url));
+      throw new Error(`panggilan keluar tak ter-intercept: ${url}`);
+    };
+  });
+
+  afterEach(async () => {
+    globalThis.fetch = originalFetch;
+    if (env.AUTH_KV) await env.AUTH_KV.delete(LOCK_KEY); // teardown state test ini
+  });
+
+  it('returns a clear 500 naming GROQ_API_KEY when it is unset, without calling upstream', async () => {
+    const res = await worker.fetch(post('/api/transcribe'), makeEnv({ AUTH_ENABLED: 'false' }));
+
+    expect(res.status).toBe(500);
+    expect(await res.text()).toContain('GROQ_API_KEY');
+    expect(outboundCalls).toEqual([]); // tidak ada panggilan Groq yang nyangkut
+  });
+
+  it('locks the IP after 3 failed attempts: the 4th request gets 429 even with correct credentials', async () => {
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBeNull(); // mulai dari bersih
+
+    const wrong = authHeaders('wrong-pass');
+    for (let i = 0; i < 3; i++) {
+      const res = await worker.fetch(post('/api/chat', wrong), makeEnv());
+      expect(res.status).toBe(401);
+    }
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBe('3');
+
+    const locked = await worker.fetch(post('/api/chat', authHeaders(PASS)), makeEnv());
+    expect(locked.status).toBe(429);
+    expect(locked.headers.get('Retry-After')).toBe('900');
+    expect(await locked.text()).toContain('15 menit');
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBe('3'); // tetap terkunci
+  });
+
+  it('a successful login resets the failure counter', async () => {
+    // IP yang sama dengan test lockout di atas — kalau afterEach tidak
+    // me-tebas state, assert pertama ini gagal.
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBeNull();
+
+    const wrong = authHeaders('wrong-pass');
+    expect((await worker.fetch(post('/api/chat', wrong), makeEnv())).status).toBe(401);
+    expect((await worker.fetch(post('/api/chat', wrong), makeEnv())).status).toBe(401);
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBe('2');
+
+    const success = await worker.fetch(
+      new Request('https://example.com/', { method: 'GET', headers: authHeaders(PASS) }),
+      makeEnv(),
+    );
+    expect(success.status).toBe(200);
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBeNull(); // counter ter-reset
+
+    expect((await worker.fetch(post('/api/chat', wrong), makeEnv())).status).toBe(401);
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBe('1'); // hitung ulang dari 1, bukan lanjut
   });
 });
