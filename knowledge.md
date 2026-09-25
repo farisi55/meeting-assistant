@@ -1,6 +1,6 @@
 ---
 project: meeting-assistant
-version: 1.0.4
+version: 1.0.5
 source: prd
 last_updated: 2026-09-25
 project_shape: fullstack
@@ -236,6 +236,14 @@ external_assets: false
 - CORS: not applicable for MVP — frontend and API share one origin
 - Security hard rules: no secrets in source code, only `.dev.vars`
   (gitignored) or `wrangler secret`
+- Local secrets file handling: `.dev.vars` is developer-owned, gitignored,
+  and holds real API keys — tooling must never overwrite, truncate, or
+  delete it (incident 2026-09-25: a pre-commit-hook verification step ran
+  `printf 'X=1' > .dev.vars && rm -f .dev.vars`, destroying the file and
+  its real keys; it had to be recreated from `.dev.vars.example` and the
+  keys pasted again). Verify the hook's secret-blocking with a throwaway
+  `verify-hook.pem` instead — the hook blocks `*.pem`/`*.key`/`*.p12`/
+  `secrets/` too, so `.dev.vars` never needs to be touched
 - Known technical limitations:
   - `npm install` on this dependency set (as of 2026-09-24, npm 10.9.7 +
     `@cloudflare/vitest-pool-workers@0.22.0` + `vitest@4.1.11`) crashes with

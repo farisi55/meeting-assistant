@@ -1,6 +1,6 @@
 ---
 project: meeting-assistant
-knowledge_version: 1.0.4
+knowledge_version: 1.0.5
 changelog_version: 1.0.10
 created: 2026-09-23
 status: in_progress
