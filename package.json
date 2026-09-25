@@ -1,0 +1,19 @@
+{
+  "name": "meeting-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "jsdom": "^30.0.0",
+    "vitest": "4.1.11",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -1,0 +1,13 @@
+# Salin file ini jadi .dev.vars (sudah di-gitignore) dan isi nilai asli.
+# .dev.vars TIDAK PERNAH di-commit — persis seperti .env di n8n/9router.
+
+AUTH_ENABLED=false
+
+OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxxxxxxxxxxxxxx
+GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxx
+MISTRAL_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
+SAMBANOVA_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
+
+# Hanya perlu diisi kalau AUTH_ENABLED=true:
+BASIC_AUTH_USER=
+BASIC_AUTH_PASS=

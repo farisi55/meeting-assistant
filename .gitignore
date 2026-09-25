@@ -1,0 +1,12 @@
+node_modules/
+.dev.vars
+.env
+.env.*
+*.pem
+*.key
+*.p12
+secrets/
+.wrangler/
+*.log
+.DS_Store
+coverage/
