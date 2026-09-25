@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
-knowledge_version: 1.0.3
-changelog_version: 1.0.8
+knowledge_version: 1.0.4
+changelog_version: 1.0.9
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,24 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #010 — Feature: "Steer AI" Response Drafting Mode
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Implement the response-drafting mode from @knowledge §7 — user supplies rough points, the system prompt instructs the model to rephrase only (never add new claims), result shown as copyable text.
-- **Files to create / modify:** `public/app.js`
-- **Acceptance criteria:**
-  - [ ] Submitting rough user-supplied points produces fluent output via `/api/chat` using a system prompt that explicitly forbids introducing new claims
-  - [ ] Output is rendered with a visible copy action
-  - [ ] Unit test written and passing for new logic (system-prompt construction tested without a live network call)
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #008, Task #009
-- **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #011 — Feature: Interview-Practice Mode
 - **Phase:** Phase 3 — Core Features
@@ -40,6 +22,12 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #008, Task #009
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #012 — Audio → Transcript → Response Pipeline Wiring
 - **Phase:** Phase 3 — Core Features
@@ -373,3 +361,29 @@ simple_mode: true
   - [TEST] Mutation verification: disabled `throwHttpError` on `/api/chat` → exactly the 2 HTTP-failure tests failed; disabled payload validation → exactly the `INVALID_RESPONSE` test failed; each reverted, 54/54 green after restore
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. "Request body size limits" assessed at source: messages are composed downstream from #008's 5,000-char-capped context fields; no second cap warranted in the transport helper. Correlation-ID item per §8's explicit "no request_id envelope" decision.
 - **Knowledge drift:** none — wrapper conforms to §5 schemas verbatim (`_provider` passthrough, error status+body passthrough); §3:61 documents this module; naming/one-line-docstrings per §4; no new library (§2), infra (§8), or delete (§7) change.
+
+### Task #010 — Feature: "Steer AI" Response Drafting Mode ✅
+- **Completed:** 2026-09-25
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-010-steer-ai-response-drafting
+- **Files created / modified:**
+  - `public/app.js` — **modified**: `STEER_SYSTEM_PROMPT` (exported; explicitly forbids new claims/facts/examples/statistics/commitments per §7), `draftSteer(points, options)` → validates + assembles `[system, user]` messages → `chat()` from Task #009, `mountSteerPanel(root, {fetchFn})` (points textarea → "Susun" → output via textContent + visible "Salin" copy action + inline status/error, submit disabled while in flight), `initApp` now mounts **both** context and steer panels into wrapper roots (composite `destroy()`)
+  - `vitest.worker.config.js` — **modified (hermetic fix, see Notes)**: pinned all sensitive vars via `miniflare.bindings` (`AUTH_ENABLED='true'`, dummy creds, 4 API keys = `''`)
+  - `test/frontend/steer-drafting.test.js` — **created**: 8 tests — prompt-forbids-new-claims (pure, zero network), draft wiring (mocked fetchFn, asserts system+user messages), pre-network VALIDATION, submit→render→copy-visible, clipboard write exact text + "Tersalin", failed draft error surfacing, copy-failure inline message, `initApp` dual-panel mount
+- **Acceptance criteria met:**
+  - [x] Submitting rough points produces fluent output via `/api/chat` through a system prompt that explicitly forbids introducing new claims (prompt content asserted by regex; request body proven to carry it as `messages[0]`; no live network in tests)
+  - [x] Output rendered with a visible copy action (`steer-copy` button flips `hidden=false` only after a successful draft; clipboard write asserted with exact output text)
+  - [x] Unit test written and passing for new logic (8 tests; system-prompt construction tested without any network call)
+  - [x] Test is isolated: fresh `root` per test, per-test `fetchFn` closures, `navigator.clipboard` stub restored via descriptor in `afterEach`
+- **Security gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Regression:** Passed 62 (54 baseline + 8 new), 0 failed (`npm test` → `vitest run`, 2.41s) — **after repairing a broken baseline first** (see Notes): 2 pre-existing auth tests were failing due to `.dev.vars` leakage before any Task #010 code existed; fixed + re-verified both with and without the developer's `.dev.vars` present (54/54 each) before implementing. `node --check public/app.js` OK; pre-commit hook re-verified (staged `.dev.vars` → exit 1)
+- **Decisions made:**
+  - [PATTERN] Steer draft runs through Task #009's `chat()` (injectable `fetchFn`) — no second HTTP layer, so timeout/error/`ProvidersError` handling is inherited and tests stay offline
+  - [PATTERN] Empty/whitespace points rejected as `ProvidersError{VALIDATION}` pre-network — same single catchable error type as transport failures (one UI catch branch)
+  - [PATTERN] Copy action: `navigator.clipboard.writeText` on explicit click, failure → inline catchable message (text remains selectable) — no deprecated `execCommand`, all output via `textContent` per §6 (XSS-safe by construction)
+  - [ARCH] `initApp` mounts panels into per-panel wrapper roots and returns a composite `destroy()` — keeps #008's `mountContextPanel` contract intact (its 10 tests untouched) while making the entry point own both panels
+  - [TEST] Mutation verification: removed the forbid sentence from `STEER_SYSTEM_PROMPT` → exactly the prompt test failed; made `copyButton.hidden` never flip → exactly the 3 copy-dependent tests failed; each reverted, 62/62 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. **Baseline incident (pre-Step-3):** developer's local `.dev.vars` (created 16:57 from README instructions, real keys, `AUTH_ENABLED=false`) was being loaded into the worker test runtime → auth disabled in suite → `handleChat` made **real outbound calls with real API keys** (402 upstream passthrough; 2 baseline tests red, suite ~4s). Fixed by pinning all sensitive vars in `vitest.worker.config.js` `miniflare.bindings`; verified hermetic both with and without `.dev.vars` present. Forward impact: `public/app.js` also modified by #011, #012, #015 (tracked, intentional).
+- **Knowledge drift:** UPDATE REQUIRED: @knowledge §9 — new known-limitation entry: `vitest-pool-workers` loads local `.dev.vars` into the test runtime; `vitest.worker.config.js` pins sensitive vars to keep the suite hermetic (edit applied this task); version bumped 1.0.3 → 1.0.4, `knowledge_version` synced.
