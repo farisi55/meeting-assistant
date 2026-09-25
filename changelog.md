@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.3
-changelog_version: 1.0.3
+changelog_version: 1.0.4
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,24 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #005 — Test Coverage: Chat Provider Fallback Logic
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Add test coverage for the existing `handleChat`/`callProvider` fallback chain in `worker.js` (implementation already exists from a prior session; this task's remaining work is comprehensive tests and closing any gap they surface).
-- **Files to create / modify:** `worker.js` (fix any bug the tests find), `test/worker.test.js`
-- **Acceptance criteria:**
-  - [ ] Test confirms a non-2xx response from one provider causes fallback to the next provider in `FALLBACK_ORDER`
-  - [ ] Test confirms a provider with no API key env var set is skipped without throwing
-  - [ ] Unit test written and passing for new logic
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #001
-- **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #006 — Test Coverage: Transcribe Proxy & Auth Lockout
 - **Phase:** Phase 3 — Core Features
@@ -40,6 +22,12 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state (KV state reset between tests)
 - **Dependencies:** Task #001
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #007 — Frontend: Audio Capture Module
 - **Phase:** Phase 3 — Core Features
@@ -310,3 +298,27 @@ simple_mode: true
   - [PATTERN] Rule bans only PII-bearing logs, not `console.*` outright — knowledge §8 forbids transcript/credential content, not non-PII diagnostics (provider name, status code, duration); a blanket ban would break future legitimate logging. Denylist: body, messages, transcript, Authorization, BASIC_AUTH_*, API_KEY, apiKey, password, decoded, encoded
 - **Notes:** No git remote — `git pull/push origin dev` N/A (same as #003); merge is local to `dev`. ESLint still absent from the repo (pre-existing, recorded in Task #003 Notes).
 - **Knowledge drift:** UPDATE REQUIRED: @knowledge §3 — added `CONTRIBUTING.md` to the module structure tree (edit applied this task); version bumped 1.0.2 → 1.0.3, `knowledge_version` synced.
+
+### Task #005 — Test Coverage: Chat Provider Fallback Logic ✅
+- **Completed:** 2026-09-25
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-005-chat-provider-fallback-tests
+- **Files created / modified:**
+  - `test/worker.test.js` — 6 new tests for the `handleChat`/`callProvider` fallback chain: non-2xx → next provider in `FALLBACK_ORDER`; missing-key provider skipped without throw and without a network call; chain exhaustion returns the last provider's real status/body; forced `provider` bypasses the chain; unknown `provider` → 500 with zero outbound calls; no keys at all → 500
+  - `worker.js` — **unchanged**: no bug surfaced (mutation check below confirmed the tests would catch one; `git diff worker.js` empty)
+- **Acceptance criteria met:**
+  - [x] Test confirms a non-2xx response from one provider causes fallback to the next provider in `FALLBACK_ORDER` (openrouter 500 → groq 200, `_provider: 'groq'`, exact call order asserted)
+  - [x] Test confirms a provider with no API key env var set is skipped without throwing (only `GROQ_API_KEY` set → openrouter never called, groq answers)
+  - [x] Unit test written and passing for new logic (6 tests)
+  - [x] Test is isolated: sets up and tears down its own state — mock installed in `beforeEach`, `globalThis.fetch` restored in `afterEach`, `outboundCalls`/`routes` rebuilt per test, synthetic `env` per test
+- **Security gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped; HIGH-RISK OVERRIDE not needed beyond Phase 3's own STANDARD tier]
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Regression:** Passed 20 (14 baseline + 6 new), 0 failed (`npm test` → `vitest run`, 1.33s)
+- **Decisions made:**
+  - [TEST] Outbound mocking done by swapping `globalThis.fetch` per test — `cloudflare:test` in `@cloudflare/vitest-pool-workers@0.22.0` exports no `fetchMock` (verified against the package's own runtime export list), and the swap is writable in workerd; unknown hosts throw, acting as `disableNetConnect` so a missed interceptor fails the test instead of hitting the real network. **Task #013: reuse this pattern for timeout tests.**
+  - [TEST] Mutation verification: inserted an early-return on non-2xx into `handleChat` → exactly the 2 fallback tests failed, everything else green → restored. Proves the suite enforces the chain rather than restating it.
+  - [TEST] Auth disabled via synthetic `env` (`AUTH_ENABLED: 'false'`) in this suite to isolate the fallback chain; auth paths remain covered by the pre-existing `worker auth` + `fail-fast` suites (no overlap).
+  - [API] 429-specific behaviour deliberately NOT covered here (statuses used: 500/503) — that is Task #014's exact scope; forced-provider and invalid-provider coverage added as part of "comprehensive tests" since no task owns them.
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. No runtime change, so no new knowledge contract to document.
+- **Knowledge drift:** none — no new library (§2), naming/test isolation per §4, no new module (§3), no API or error-contract change (§5), no infra change (§8).
