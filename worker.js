@@ -82,6 +82,23 @@ function authRequired(env) {
 }
 
 /**
+ * Fail-fast konfigurasi auth: kalau AUTH_ENABLED=true tapi ada kredensial
+ * yang belum di-set, kembalikan 500 diagnostik yang menyebut NAMA var yang
+ * hilang (bukan nilainya) — bukan 401 generik yang bikin bingung saat debug.
+ * Mengembalikan null kalau konfigurasi lengkap atau auth memang dimatikan.
+ */
+function authConfigError(env) {
+  if (!authRequired(env)) return null;
+  const missing = ['BASIC_AUTH_USER', 'BASIC_AUTH_PASS'].filter((name) => !env[name]);
+  if (missing.length === 0) return null;
+  return new Response(
+    `Konfigurasi auth tidak lengkap: ${missing.join(', ')} belum di-set. ` +
+      'Set lewat `wrangler secret put <NAMA>` (produksi) atau .dev.vars (lokal).',
+    { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
+  );
+}
+
+/**
  * Cek Basic Auth + lockout. Mengembalikan { ok, locked }.
  * - Belum ada header Authorization sama sekali -> ok:false, locked:false
  *   (ini baru "silakan login", BUKAN percobaan gagal — supaya page load
@@ -250,6 +267,11 @@ async function handleTranscribe(request, env) {
 
 export default {
   async fetch(request, env) {
+    // Sebelum auth & routing: konfigurasi rusak harus gagal keras (500)
+    // untuk semua request, termasuk frontend statis — bukan 401 diam-diam.
+    const configError = authConfigError(env);
+    if (configError) return configError;
+
     const auth = await checkAuth(request, env);
     if (!auth.ok) return unauthorized(auth.locked);
 
@@ -265,3 +287,6 @@ export default {
     return env.ASSETS.fetch(request);
   },
 };
+
+// Diekspor hanya untuk unit test (pemeriksaan fail-fast konfigurasi auth).
+export { authConfigError };

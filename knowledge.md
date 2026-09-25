@@ -1,8 +1,8 @@
 ---
 project: meeting-assistant
-version: 1.0.1
+version: 1.0.2
 source: prd
-last_updated: 2026-09-24
+last_updated: 2026-09-25
 project_shape: fullstack
 simple_mode: true
 external_assets: false
@@ -133,7 +133,12 @@ external_assets: false
     model?, language? }`. Response: passthrough from Groq Whisper.
 - Error response format: HTTP status + upstream response body passed
   through unmodified — no `request_id` field or custom error envelope;
-  this project explicitly decided against a standardized wrapper
+  this project explicitly decided against a standardized wrapper.
+  Local exception (fail-fast config check): when `AUTH_ENABLED=true` but
+  `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` is unset, the Worker returns a
+  plain-text 500 naming the missing var(s) — values never included, no
+  `WWW-Authenticate` header — before auth, routing, or static serving.
+  This is a deployment-misconfiguration diagnostic, not an error envelope
 - Pagination: none
 
 ## 6. UI / UX Constraints

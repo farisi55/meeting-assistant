@@ -9,6 +9,15 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: './wrangler.toml' },
+      // Kredensial dummy khusus test (bukan rahasia) supaya jalur auth
+      // "kedua var ter-set" bisa diuji lewat SELF.fetch; skenario var hilang
+      // diuji lewat worker.fetch dengan env sintetis di test/worker.test.js.
+      miniflare: {
+        bindings: {
+          BASIC_AUTH_USER: 'test-user',
+          BASIC_AUTH_PASS: 's3cr3t-pass',
+        },
+      },
     }),
   ],
   test: {
