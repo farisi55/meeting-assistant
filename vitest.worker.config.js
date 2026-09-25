@@ -12,10 +12,22 @@ export default defineConfig({
       // Kredensial dummy khusus test (bukan rahasia) supaya jalur auth
       // "kedua var ter-set" bisa diuji lewat SELF.fetch; skenario var hilang
       // diuji lewat worker.fetch dengan env sintetis di test/worker.test.js.
+      //
+      // HERMETIK: bindings di bawah WAJIB menimpa .dev.vars lokal (yang
+      // berisi kredensial & API key ASLI milik developer). Tanpa pinning ini,
+      // AUTH_ENABLED=false di .dev.vars mematikan auth di test dan
+      // handleChat melakukan panggilan jaringan asli dengan key asli.
       miniflare: {
         bindings: {
+          AUTH_ENABLED: 'true',
           BASIC_AUTH_USER: 'test-user',
           BASIC_AUTH_PASS: 's3cr3t-pass',
+          // String kosong = falsy di worker.js → provider di-skip, tidak
+          // pernah ada outbound call dari test suite.
+          OPENROUTER_API_KEY: '',
+          GROQ_API_KEY: '',
+          MISTRAL_API_KEY: '',
+          SAMBANOVA_API_KEY: '',
         },
       },
     }),

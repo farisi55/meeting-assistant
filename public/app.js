@@ -1,9 +1,11 @@
 // public/app.js — UI entry point: context-upload panel (CV / job description /
 // product knowledge) with client-side 5,000-char cap enforcement and
-// localStorage persistence (knowledge §7). Side-effect free: the browser
-// bootstraps via initApp(); tests mount panels directly.
+// localStorage persistence (knowledge §7), plus the "Steer AI" response
+// drafting panel (knowledge §7). Side-effect free: the browser bootstraps
+// via initApp(); tests mount panels directly.
 
 import { MAX_CONTEXT_CHARS } from './config.js';
+import { ProvidersError, chat } from './providers.js';
 
 /** The three context fields accepted by the app, in display order (knowledge §7). */
 export const CONTEXT_FIELDS = [
@@ -151,10 +153,134 @@ export function mountContextPanel(root, { storage = globalThis.localStorage } = 
 }
 
 /**
- * Browser bootstrap: mount the context panel into the app root
- * (defaults to #app). Called once by index.html's module entry.
+ * System prompt for "Steer AI" (knowledge §7): rephrase/polish ONLY the
+ * user's own rough points — the model must never add new claims, facts,
+ * examples, statistics, or commitments.
+ */
+export const STEER_SYSTEM_PROMPT =
+  'You are "Steer AI", a response-drafting assistant. Rephrase and polish ONLY the rough points the user provides. ' +
+  "Never introduce new claims, facts, examples, statistics, or commitments that are not already present in the user's points. " +
+  'If a point is vague, preserve its original meaning instead of inventing detail. ' +
+  "Keep the same language as the user's points and output only the drafted response text.";
+
+/**
+ * Draft a response from the user's rough points via POST /api/chat.
+ * Resolves with { text, provider, raw }; rejects with ProvidersError
+ * (including VALIDATION for empty input).
+ */
+export async function draftSteer(points, options = {}) {
+  const text = typeof points === 'string' ? points.trim() : '';
+  if (!text) {
+    throw new ProvidersError('Poin tidak boleh kosong', { code: 'VALIDATION', endpoint: '/api/chat' });
+  }
+  return chat(
+    [
+      { role: 'system', content: STEER_SYSTEM_PROMPT },
+      { role: 'user', content: text },
+    ],
+    options,
+  );
+}
+
+/**
+ * Mount the "Steer AI" drafting panel into root: rough-points textarea,
+ * submit action, rendered output with a visible copy action, and inline
+ * status/error messages (all via textContent — knowledge §6). Returns
+ * { destroy() } which unmounts the panel.
+ */
+export function mountSteerPanel(root, { fetchFn, ...chatOptions } = {}) {
+  const panel = document.createElement('section');
+  panel.dataset.testid = 'steer-panel';
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Steer AI — Penyusun Respons';
+  panel.append(heading);
+
+  const label = document.createElement('label');
+  label.htmlFor = 'steer-points';
+  label.textContent = 'Poin kasar';
+
+  const textarea = document.createElement('textarea');
+  textarea.id = 'steer-points';
+  textarea.dataset.testid = 'steer-points';
+
+  const error = document.createElement('p');
+  error.dataset.testid = 'steer-error';
+  error.hidden = true;
+  error.setAttribute('role', 'alert');
+
+  const status = document.createElement('p');
+  status.dataset.testid = 'steer-status';
+  status.setAttribute('role', 'status');
+
+  const output = document.createElement('div');
+  output.dataset.testid = 'steer-output';
+
+  const copyButton = document.createElement('button');
+  copyButton.type = 'button';
+  copyButton.dataset.testid = 'steer-copy';
+  copyButton.textContent = 'Salin';
+  copyButton.hidden = true; // muncul hanya setelah ada hasil
+
+  const submitButton = document.createElement('button');
+  submitButton.type = 'button';
+  submitButton.dataset.testid = 'steer-submit';
+  submitButton.textContent = 'Susun';
+
+  submitButton.addEventListener('click', async () => {
+    submitButton.disabled = true;
+    error.hidden = true;
+    status.textContent = 'Menyusun...';
+    try {
+      const result = await draftSteer(textarea.value, { fetchFn, ...chatOptions });
+      output.textContent = result.text;
+      copyButton.hidden = false;
+      status.textContent = `Disusun oleh ${result.provider}`;
+    } catch (err) {
+      output.textContent = '';
+      copyButton.hidden = true;
+      error.textContent = err?.message || 'Gagal menyusun respons';
+      error.hidden = false;
+      status.textContent = '';
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+
+  copyButton.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(output.textContent);
+      status.textContent = 'Tersalin';
+      error.hidden = true;
+    } catch {
+      error.textContent = 'Gagal menyalin — teks tetap bisa disalin manual dari kotak hasil';
+      error.hidden = false;
+    }
+  });
+
+  panel.append(label, textarea, submitButton, status, output, copyButton, error);
+  root.replaceChildren(panel);
+  return {
+    destroy() {
+      root.replaceChildren();
+    },
+  };
+}
+
+/**
+ * Browser bootstrap: mount the context-upload and Steer AI panels into the
+ * app root (defaults to #app). Called once by index.html's module entry.
  */
 export function initApp(root = document.getElementById('app'), options = {}) {
   if (!root) throw new Error('initApp: root element #app not found');
-  return mountContextPanel(root, options);
+  const contextRoot = document.createElement('div');
+  const steerRoot = document.createElement('div');
+  root.replaceChildren(contextRoot, steerRoot);
+  mountContextPanel(contextRoot, options);
+  mountSteerPanel(steerRoot, options);
+  return {
+    destroy() {
+      root.replaceChildren();
+    },
+  };
 }

@@ -1,6 +1,6 @@
 ---
 project: meeting-assistant
-version: 1.0.3
+version: 1.0.4
 source: prd
 last_updated: 2026-09-25
 project_shape: fullstack
@@ -267,6 +267,15 @@ external_assets: false
     Chromium-based browsers (Chrome/Edge) on Windows/Linux/ChromeOS;
     Firefox and Safari do not forward audio this way; macOS only
     forwards tab audio, not full system audio
+  - `@cloudflare/vitest-pool-workers` loads a developer's local `.dev.vars`
+    (real API keys, auth toggles) into the worker test runtime: a local
+    `AUTH_ENABLED=false` silently disables auth in the suite and lets
+    `handleChat` make real outbound calls with real keys (observed 2026-09-25:
+    2 baseline tests failed with upstream-passthrough statuses).
+    `vitest.worker.config.js` therefore pins every sensitive var via
+    `miniflare.bindings` (auth on, dummy credentials, empty-string API keys)
+    so tests are hermetic regardless of local dev config — keep those pins
+    when editing that config
 - Compliance / pentest requirements: none stated
 
 ### Sensitive / High-Blast-Radius Code
