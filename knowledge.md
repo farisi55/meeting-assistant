@@ -1,6 +1,6 @@
 ---
 project: meeting-assistant
-version: 1.0.2
+version: 1.0.3
 source: prd
 last_updated: 2026-09-25
 project_shape: fullstack
@@ -40,9 +40,10 @@ external_assets: false
 - Folder/module structure:
   ```
   project-root/
-  ├── worker.js                  # Backend: auth, routing, provider fallback
-  ├── wrangler.toml               # Config Cloudflare Workers + vars + KV binding
-  ├── package.json
+   ├── worker.js                  # Backend: auth, routing, provider fallback
+   ├── wrangler.toml               # Config Cloudflare Workers + vars + KV binding
+   ├── package.json
+   ├── CONTRIBUTING.md             # Aturan wajib kontribusi: no-PII logging (diuji test guardrail), pre-commit, test isolasi
   ├── .npmrc                       # legacy-peer-deps=true (lihat §9 known limitations)
   ├── .dev.vars                     # Secret lokal (gitignored)
   ├── .dev.vars.example              # Template tanpa nilai asli, dicommit

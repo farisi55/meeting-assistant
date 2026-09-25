@@ -108,6 +108,8 @@ function authConfigError(env) {
  *   walau kredensial yang dikirim sudah benar, sampai TTL habis
  */
 async function checkAuth(request, env) {
+  // PII-SAFE LOGGING: header Authorization, user, dan password tidak boleh
+  // pernah masuk console.* — lihat CONTRIBUTING.md & knowledge §8.
   if (!authRequired(env)) return { ok: true, locked: false };
 
   const hasKv = !!env.AUTH_KV;
@@ -199,6 +201,9 @@ async function callProvider(id, cfg, env, body) {
 }
 
 async function handleChat(request, env) {
+  // PII-SAFE LOGGING: isi body (messages, transcript, konteks) tidak boleh
+  // pernah masuk console.* — log hanya metadata non-PII (nama provider,
+  // status code). Lihat CONTRIBUTING.md & knowledge §8.
   const body = await request.json();
 
   // Client boleh paksa satu provider spesifik: { "provider": "groq", ... }
@@ -234,6 +239,8 @@ async function handleChat(request, env) {
 }
 
 async function handleTranscribe(request, env) {
+  // PII-SAFE LOGGING: file audio, hasil transkrip, dan GROQ_API_KEY tidak
+  // boleh pernah masuk console.* — lihat CONTRIBUTING.md & knowledge §8.
   if (!env.GROQ_API_KEY) {
     return new Response(
       'GROQ_API_KEY belum di-set (satu-satunya STT gratis di daftar provider ini)',

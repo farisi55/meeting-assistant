@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
-knowledge_version: 1.0.2
-changelog_version: 1.0.2
+knowledge_version: 1.0.3
+changelog_version: 1.0.3
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,24 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #004 — PII-Safe Logging Guardrail
-- **Phase:** Phase 1 — Foundation
-- **Scope:** Document and enforce (via code comment + a short CONTRIBUTING note) that transcript/conversation content and credential values must never be passed to `console.log`/`console.error` in `worker.js`, per @knowledge §8.
-- **Files to create / modify:** `worker.js` (guard comments at the top of `handleChat`/`handleTranscribe`/`checkAuth`), `CONTRIBUTING.md`
-- **Acceptance criteria:**
-  - [ ] No existing `console.*` call in `worker.js` includes request body, message content, or credential values (verified by inspection — currently zero such calls exist)
-  - [ ] `CONTRIBUTING.md` states the no-PII-logging rule explicitly for future changes
-  - [ ] Unit test written and passing for new logic
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #001
-- **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #005 — Test Coverage: Chat Provider Fallback Logic
 - **Phase:** Phase 3 — Core Features
@@ -40,6 +22,12 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #001
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #006 — Test Coverage: Transcribe Proxy & Auth Lockout
 - **Phase:** Phase 3 — Core Features
@@ -297,3 +285,28 @@ simple_mode: true
   - [INFRA] Re-tracked `.githooks/pre-commit` and dropped `.githooks/` from `.gitignore` — out-of-band commit 7adb43f had untracked the hook, leaving the Phase 1 pre-commit control active only on this working copy (a fresh clone + `npm prepare` would point `core.hooksPath` at a nonexistent file and silently do nothing); verified live: staged `.dev.vars` → commit rejected, exit 1
 - **Notes:** No git remote exists (`git remote -v` empty), so the protocol's `git pull/push origin dev` steps could not run — work merged to local `dev` only; Banu should add a remote if off-machine backup is wanted. Pre-existing observations, deliberately untouched (not gate failures for this task's diff): (1) ESLint is named in knowledge §4 but has no dependency or config in the repo, so the Phase 1 lint step was covered by `node --check` + the full suite; (2) `POST` body parsing has no Content-Type guard and no try/catch at the parse site — no scheduled task covers it; worth a future task if this API ever gains external consumers.
 - **Knowledge drift:** UPDATE REQUIRED: @knowledge §5 — documented the fail-fast 500 auth-config exception to the error-response contract (edit already applied this task); version bumped 1.0.1 → 1.0.2, `knowledge_version` synced.
+
+### Task #004 — PII-Safe Logging Guardrail ✅
+- **Completed:** 2026-09-25
+- **Phase:** Phase 1 — Foundation
+- **Status:** OK
+- **Branch:** feat/task-004-pii-safe-logging-guardrail
+- **Files created / modified:**
+  - `worker.js` — `PII-SAFE LOGGING` guard comment at the top of `checkAuth`, `handleChat`, and `handleTranscribe` (comment-only diff — zero runtime behavior change, verified line-by-line)
+  - `CONTRIBUTING.md` — explicit no-PII-logging rule (transcript/body/credential values never to `console.*`), rationale from knowledge §8, the non-PII metadata that IS allowed, and a pointer to the enforcing test
+  - `test/frontend/logging-guardrail.test.js` — 3 source-scan tests: no `console.*` call in `worker.js` references body/messages/transcript/credentials; guard present in all 3 handlers; CONTRIBUTING.md states the rule
+  - `knowledge.md` — §3 structure tree adds `CONTRIBUTING.md`; bumped to v1.0.3
+- **Acceptance criteria met:**
+  - [x] No existing `console.*` call in `worker.js` includes request body, message content, or credential values — now verified mechanically by the scan test (zero `console.*` calls exist today; comment lines are stripped before scanning so the guard text, which must name the forbidden tokens to explain them, cannot false-positive)
+  - [x] `CONTRIBUTING.md` states the no-PII-logging rule explicitly for future changes
+  - [x] Unit test written and passing for new logic (3 tests)
+  - [x] Test is isolated: sets up and tears down its own state — read-only file scans create no state; each test reads its own source
+- **Security gate:** STANDARD — all checks passed [— HIGH-RISK OVERRIDE: touches credential handling (`checkAuth`)] [— simple_mode: 0 items skipped; simple_mode never skips security baseline]
+- **Scalability gate:** BASIC — all checks passed [— simple_mode: 0 items skipped]
+- **Regression:** Passed 14 (11 baseline + 3 new), 0 failed (`npm test` → `vitest run`, 1.38s); `node --check worker.js` OK
+- **Decisions made:**
+  - [TEST] Guardrail implemented as an executable source-scan test rather than prose-only, placed in the Node-side (jsdom) Vitest project — the worker project runs in workerd without filesystem access; the scan strips `//` and `*` comment lines first so guard comments (which necessarily name the forbidden tokens) never trip the detector
+  - [TEST] Negative verification performed before sign-off: injected `console.log("debug", body)` into `worker.js` → guardrail test failed naming the offending line, then restored → suite green; proves the rule enforces, not decorates
+  - [PATTERN] Rule bans only PII-bearing logs, not `console.*` outright — knowledge §8 forbids transcript/credential content, not non-PII diagnostics (provider name, status code, duration); a blanket ban would break future legitimate logging. Denylist: body, messages, transcript, Authorization, BASIC_AUTH_*, API_KEY, apiKey, password, decoded, encoded
+- **Notes:** No git remote — `git pull/push origin dev` N/A (same as #003); merge is local to `dev`. ESLint still absent from the repo (pre-existing, recorded in Task #003 Notes).
+- **Knowledge drift:** UPDATE REQUIRED: @knowledge §3 — added `CONTRIBUTING.md` to the module structure tree (edit applied this task); version bumped 1.0.2 → 1.0.3, `knowledge_version` synced.
