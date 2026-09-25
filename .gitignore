@@ -10,3 +10,4 @@ secrets/
 *.log
 .DS_Store
 coverage/
+.githooks/
