@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.3
-changelog_version: 1.0.7
+changelog_version: 1.0.8
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,24 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #009 — Frontend: Providers Client Helper
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Implement `public/providers.js` — wraps `fetch` calls to `/api/chat` and `/api/transcribe`, surfaces the `_provider` field and error states to callers.
-- **Files to create / modify:** `public/providers.js`
-- **Acceptance criteria:**
-  - [ ] A mocked successful `/api/chat` response resolves with both the reply text and `_provider`
-  - [ ] A mocked all-providers-failed response surfaces a catchable error rather than an unhandled rejection
-  - [ ] Unit test written and passing for new logic
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #001
-- **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #010 — Feature: "Steer AI" Response Drafting Mode
 - **Phase:** Phase 3 — Core Features
@@ -40,6 +22,12 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #008, Task #009
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #011 — Feature: Interview-Practice Mode
 - **Phase:** Phase 3 — Core Features
@@ -360,3 +348,28 @@ simple_mode: true
   - [TEST] Mutation verification: bypassed `saveContext`'s cap check → exactly the 2 blocked-save tests failed; skipped restore-on-mount population → exactly the persistence test failed; each reverted individually, 43/43 green after restore
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. First task modifying `public/app.js` — forward impact: #010, #011, #012, #015 also modify it (tracked, intentional). UI text is Indonesian, consistent with `worker.js` response messages. The #007 note stands: no tracker task creates `public/index.html`/`public/styles.css`.
 - **Knowledge drift:** none — cap constant + client-side validation + localStorage persistence are verbatim §7 rules; module paths per §3; no new library (§2), naming per §4 (kebab-case files, camelCase functions, one-line comments on every export), no API (§5), infra (§8), or delete (§7) change.
+
+### Task #009 — Frontend: Providers Client Helper ✅
+- **Completed:** 2026-09-25
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-009-providers-client-helper
+- **Files created / modified:**
+  - `public/providers.js` — **created**: `ProvidersError` (codes `VALIDATION`/`HTTP`/`INVALID_RESPONSE`/`ABORTED`/`NETWORK`, carries `status`/`body`/`endpoint`), `chat(messages, options)` → `{ text, provider, raw }` with `_provider` surfaced, `transcribe(file, options)` → `{ text, raw }`; injectable `fetchFn`, explicit `AbortSignal` timeouts (60s chat / 120s transcribe, configurable)
+  - `test/frontend/providers.test.js` — **created**: 11 tests — success resolves text+`_provider` + request shape, option passthrough (`provider`/`model`/`temperature`/`max_tokens`), 429 all-failed caught via try/catch, 500 plain-text surfaced, 3× `INVALID_RESPONSE` (missing `_provider`, missing `choices`, broken JSON), pre-network `VALIDATION`, transcribe FormData + 400 failure + Blob validation, AbortSignal wiring + abort→`ABORTED`, network→`NETWORK`
+- **Acceptance criteria met:**
+  - [x] Mocked successful `/api/chat` resolves with both the reply text and `_provider` (`{ text: 'halo dari groq', provider: 'groq' }`, raw payload retained)
+  - [x] Mocked all-providers-failed response (429 passthrough per §5) surfaces a **catchable** `ProvidersError` — asserted via explicit try/catch capture *and* `rejects.*`; never an unhandled rejection
+  - [x] Unit test written and passing for new logic (11 tests)
+  - [x] Test is isolated: every test builds its own `fetchFn` closure (captured calls local to the test); module holds zero module-level mutable state — no global `fetch` mutation, nothing to leak between tests
+- **Security gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped]
+- **Regression:** Passed 54 (43 baseline + 11 new), 0 failed (`npm test` → `vitest run`, 2.08s); `node --check public/providers.js` OK; pre-commit hook re-verified (staged `.dev.vars` → exit 1)
+- **Decisions made:**
+  - [PATTERN] Injectable `fetchFn` (default `globalThis.fetch`) instead of the #005/#006 global-swap pattern — this is a caller-invoked helper, so constructor-style injection gives per-test isolation with zero global mutation; the swap pattern remains correct for handler-driven worker tests (documented in #005)
+  - [PATTERN] Every failure (HTTP status, malformed payload, abort, network) funnels into one `ProvidersError` with stable `code` + `status`/`body`/`endpoint` — gives #012's UI a single catch branch per state instead of string-matching; messages deliberately exclude response bodies (bodies live on the error object only, never logged — no-PII-logging rule)
+  - [PATTERN] Response payload validated (`choices[0].message.content` + `_provider` required; Whisper `text` required) — contract drift from §5 fails loudly as `INVALID_RESPONSE` rather than resolving `undefined` into the UI
+  - [PATTERN] Endpoint paths hardcoded (`/api/chat`, `/api/transcribe`) — no caller-supplied URLs, so the helper cannot be steered elsewhere
+  - [TEST] Mutation verification: disabled `throwHttpError` on `/api/chat` → exactly the 2 HTTP-failure tests failed; disabled payload validation → exactly the `INVALID_RESPONSE` test failed; each reverted, 54/54 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. "Request body size limits" assessed at source: messages are composed downstream from #008's 5,000-char-capped context fields; no second cap warranted in the transport helper. Correlation-ID item per §8's explicit "no request_id envelope" decision.
+- **Knowledge drift:** none — wrapper conforms to §5 schemas verbatim (`_provider` passthrough, error status+body passthrough); §3:61 documents this module; naming/one-line-docstrings per §4; no new library (§2), infra (§8), or delete (§7) change.
