@@ -80,9 +80,11 @@ describe('fail-fast konfigurasi auth (Task #003, Task #010A)', () => {
     expect(await res.text()).toBe('asset-ok');
   });
 
-  it('accepts a correct Bearer token and rejects a wrong one when config is complete', async () => {
+  it('accepts a correct Bearer token and rejects a wrong one on /api/* when config is complete', async () => {
+    // Path /api/* — sejak Task #010B auth hanya menjaga API; shell statis
+    // dilayani tanpa auth (lihat describe 'auth scope').
     const good = await worker.fetch(
-      new Request('https://example.com/', {
+      new Request('https://example.com/api/ping', {
         headers: { Authorization: `Bearer ${TOKEN}` },
       }),
       makeEnv(),
@@ -90,7 +92,7 @@ describe('fail-fast konfigurasi auth (Task #003, Task #010A)', () => {
     expect(good.status).toBe(200);
 
     const bad = await worker.fetch(
-      new Request('https://example.com/', {
+      new Request('https://example.com/api/ping', {
         headers: { Authorization: 'Bearer token-salah' },
       }),
       makeEnv(),
@@ -99,7 +101,7 @@ describe('fail-fast konfigurasi auth (Task #003, Task #010A)', () => {
 
     // Skema lama (Basic) tidak lagi diterima — auth hanya Bearer.
     const legacy = await worker.fetch(
-      new Request('https://example.com/', {
+      new Request('https://example.com/api/ping', {
         headers: { Authorization: `Basic ${btoa(`${TOKEN}:${TOKEN}`)}` },
       }),
       makeEnv(),
@@ -337,8 +339,9 @@ describe('transcribe proxy & auth lockout (Task #006, #010A)', () => {
     expect((await worker.fetch(post('/api/chat', wrong), makeEnv())).status).toBe(401);
     expect(await env.AUTH_KV.get(LOCK_KEY)).toBe('2');
 
+    // Path /api/* — auth (dan reset counter) hanya berlaku di API sejak #010B.
     const success = await worker.fetch(
-      new Request('https://example.com/', { method: 'GET', headers: authHeaders(TOKEN) }),
+      new Request('https://example.com/api/ping', { method: 'GET', headers: authHeaders(TOKEN) }),
       makeEnv(),
     );
     expect(success.status).toBe(200);
@@ -346,5 +349,55 @@ describe('transcribe proxy & auth lockout (Task #006, #010A)', () => {
 
     expect((await worker.fetch(post('/api/chat', wrong), makeEnv())).status).toBe(401);
     expect(await env.AUTH_KV.get(LOCK_KEY)).toBe('1'); // hitung ulang dari 1, bukan lanjut
+  });
+});
+
+describe('auth scope: API only (Task #010B)', () => {
+  // Shell statis harus tetap termuat tanpa token saat AUTH_ENABLED=true —
+  // browser tidak pernah menempelkan header Authorization ke document
+  // request, jadi menjaga frontend di sini hanya membuat halaman 401.
+  const TOKEN = 'token-lokal-sintetis';
+  const IP = '203.0.113.10';
+  const LOCK_KEY = `authfail:${IP}`;
+
+  const makeEnv = (overrides = {}) => ({
+    AUTH_ENABLED: 'true',
+    BASIC_AUTH_TOKEN: TOKEN,
+    AUTH_KV: env.AUTH_KV,
+    ASSETS: { fetch: async () => new Response('asset-ok') },
+    ...overrides,
+  });
+
+  afterEach(async () => {
+    if (env.AUTH_KV) await env.AUTH_KV.delete(LOCK_KEY); // teardown state test ini
+  });
+
+  it('serves the static shell without any Authorization header while auth is enabled', async () => {
+    const res = await worker.fetch(
+      new Request('https://example.com/', { method: 'GET' }),
+      makeEnv(),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('asset-ok');
+  });
+
+  it('still requires the token on /api/*', async () => {
+    const res = await worker.fetch(
+      new Request('https://example.com/api/chat', { method: 'POST' }),
+      makeEnv(),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('ignores even a wrong token on a non-API path — lockout only counts /api/*', async () => {
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBeNull(); // mulai dari bersih
+
+    // Token SALAH sengaja dikirim ke path non-API: kalau auth masih global,
+    // counter akan jadi '2' — dengan cakupan /api/* ia harus tetap null.
+    const headers = { 'CF-Connecting-IP': IP, Authorization: 'Bearer token-salah' };
+    await worker.fetch(new Request('https://example.com/', { method: 'GET', headers }), makeEnv());
+    await worker.fetch(new Request('https://example.com/', { method: 'GET', headers }), makeEnv());
+
+    expect(await env.AUTH_KV.get(LOCK_KEY)).toBeNull(); // tidak ada hitungan auth di luar /api
   });
 });

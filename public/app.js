@@ -1,11 +1,12 @@
-// public/app.js — UI entry point: context-upload panel (CV / job description /
+// public/app.js — UI entry point: token-access panel (bearer token for the
+// /api/* routes, knowledge §5), context-upload panel (CV / job description /
 // product knowledge) with client-side 5,000-char cap enforcement and
 // localStorage persistence (knowledge §7), plus the "Steer AI" response
 // drafting panel (knowledge §7). Side-effect free: the browser bootstraps
 // via initApp(); tests mount panels directly.
 
 import { MAX_CONTEXT_CHARS } from './config.js';
-import { ProvidersError, chat } from './providers.js';
+import { ProvidersError, chat, getStoredAuthToken, setStoredAuthToken } from './providers.js';
 
 /** The three context fields accepted by the app, in display order (knowledge §7). */
 export const CONTEXT_FIELDS = [
@@ -153,6 +154,86 @@ export function mountContextPanel(root, { storage = globalThis.localStorage } = 
 }
 
 /**
+ * Mount the token-access panel into root (knowledge §5): masked bearer-token
+ * input with save/clear actions and a status line telling whether a token is
+ * stored. A saved token is never echoed back to the screen — only its
+ * presence. Returns { destroy() } which unmounts the panel.
+ */
+export function mountAuthPanel(root) {
+  const panel = document.createElement('section');
+  panel.dataset.testid = 'auth-panel';
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Akses API';
+  panel.append(heading);
+
+  const hint = document.createElement('p');
+  hint.textContent = 'Isi dengan nilai BASIC_AUTH_TOKEN di server; dipakai untuk semua request /api/*.';
+  panel.append(hint);
+
+  const label = document.createElement('label');
+  label.htmlFor = 'auth-token';
+  label.textContent = 'Token akses';
+
+  const input = document.createElement('input');
+  input.type = 'password';
+  input.id = 'auth-token';
+  input.dataset.testid = 'auth-token';
+  input.autocomplete = 'off';
+
+  const error = document.createElement('p');
+  error.dataset.testid = 'auth-error';
+  error.hidden = true;
+  error.setAttribute('role', 'alert');
+
+  const status = document.createElement('p');
+  status.dataset.testid = 'auth-status';
+  status.setAttribute('role', 'status');
+
+  const saveButton = document.createElement('button');
+  saveButton.type = 'button';
+  saveButton.dataset.testid = 'auth-save';
+  saveButton.textContent = 'Simpan';
+
+  const clearButton = document.createElement('button');
+  clearButton.type = 'button';
+  clearButton.dataset.testid = 'auth-clear';
+  clearButton.textContent = 'Hapus';
+
+  saveButton.addEventListener('click', () => {
+    const value = input.value.trim();
+    if (!value) {
+      error.textContent = 'Token tidak boleh kosong';
+      error.hidden = false;
+      status.textContent = '';
+      input.focus();
+      return;
+    }
+    setStoredAuthToken(value);
+    input.value = ''; // token tidak pernah ditampilkan kembali setelah disimpan
+    error.hidden = true;
+    status.textContent = 'Token tersimpan';
+  });
+
+  clearButton.addEventListener('click', () => {
+    setStoredAuthToken(null);
+    input.value = '';
+    error.hidden = true;
+    status.textContent = 'Token dihapus';
+  });
+
+  status.textContent = getStoredAuthToken() ? 'Token tersimpan' : 'Token belum diisi';
+
+  panel.append(label, input, error, status, saveButton, clearButton);
+  root.replaceChildren(panel);
+  return {
+    destroy() {
+      root.replaceChildren();
+    },
+  };
+}
+
+/**
  * System prompt for "Steer AI" (knowledge §7): rephrase/polish ONLY the
  * user's own rough points — the model must never add new claims, facts,
  * examples, statistics, or commitments.
@@ -268,14 +349,17 @@ export function mountSteerPanel(root, { fetchFn, ...chatOptions } = {}) {
 }
 
 /**
- * Browser bootstrap: mount the context-upload and Steer AI panels into the
- * app root (defaults to #app). Called once by index.html's module entry.
+ * Browser bootstrap: mount the token-access, context-upload, and Steer AI
+ * panels into the app root (defaults to #app). Called once by index.html's
+ * module entry.
  */
 export function initApp(root = document.getElementById('app'), options = {}) {
   if (!root) throw new Error('initApp: root element #app not found');
+  const authRoot = document.createElement('div');
   const contextRoot = document.createElement('div');
   const steerRoot = document.createElement('div');
-  root.replaceChildren(contextRoot, steerRoot);
+  root.replaceChildren(authRoot, contextRoot, steerRoot);
+  mountAuthPanel(authRoot);
   mountContextPanel(contextRoot, options);
   mountSteerPanel(steerRoot, options);
   return {

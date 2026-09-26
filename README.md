@@ -28,12 +28,13 @@ cp .dev.vars.example .dev.vars   # lalu isi nilai asli
 Minimal isi `GROQ_API_KEY` + **salah satu** key chat. Tanpa key, endpoint
 sengaja membalas 500 yang menyebut nama var yang hilang (fail-fast, bukan bug).
 
-**Frontend & token:** kalau `AUTH_ENABLED=true`, semua request API membawa
-header `Authorization: Bearer <token>`. Token diambil dari localStorage
-browser dengan key `meeting-assistant.auth-token` — simpan lewat helper
-`setStoredAuthToken(token)` dari `public/providers.js` (atau
-`localStorage.setItem('meeting-assistant.auth-token', '<token>')` di
-devtools) dengan nilai yang sama persis seperti `BASIC_AUTH_TOKEN`.
+**Frontend & token:** auth hanya menjaga route `/api/*` — shell frontend
+selalu bisa dimuat (browser tidak pernah mengirim header Authorization
+saat memuat halaman). Masukkan token lewat panel **Akses API** di UI
+(input disimpan ke localStorage key `meeting-assistant.auth-token`, atau
+via `setStoredAuthToken(token)` dari `public/providers.js`); semua request
+`/api/*` otomatis membawa `Authorization: Bearer <token>` dengan nilai
+yang sama persis seperti `BASIC_AUTH_TOKEN`.
 
 **Produksi:**
 
@@ -75,7 +76,7 @@ groq → mistral → sambanova).
 
 | Variabel | Fungsi |
 |---|---|
-| `AUTH_ENABLED` | `"true"`/`"false"` — toggle auth Bearer token |
+| `AUTH_ENABLED` | `"true"`/`"false"` — toggle auth Bearer token (berlaku untuk `/api/*`) |
 | `PUBLIC_URL` | URL publik Worker (dikirim sebagai `HTTP-Referer` ke OpenRouter) |
 
 Binding `AUTH_KV` (namespace KV) diperlukan untuk proteksi brute-force

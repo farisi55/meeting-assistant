@@ -14,6 +14,13 @@
  * KV TTL) begitu AUTH_KV di-bind. Tanpa binding AUTH_KV, auth tetap jalan
  * tapi tanpa proteksi brute-force.
  *
+ * Lingkup auth: HANYA route /api/*. Frontend statis disajikan tanpa auth
+ * karena browser tidak pernah mengirim header Authorization pada
+ * navigasi document (Bearer tidak punya prompt native seperti Basic) —
+ * menjaga shell di sini hanya membuat halaman 401 tanpa jalan masuk.
+ * Tidak ada rahasia di frontend; API tetap terlambang. Token diisi
+ * lewat panel "Akses API" di UI (localStorage meeting-assistant.auth-token).
+ *
  * LOKAL (tanpa auth) — buat file .dev.vars di root project (gitignore ini):
  *   AUTH_ENABLED=false
  *   OPENROUTER_API_KEY=sk-or-xxx
@@ -287,10 +294,18 @@ export default {
     const configError = authConfigError(env);
     if (configError) return configError;
 
-    const auth = await checkAuth(request, env);
-    if (!auth.ok) return unauthorized(auth.locked);
-
     const url = new URL(request.url);
+
+    // Auth hanya untuk /api/* — lihat komentar header file ini: shell
+    // statis harus tetap termuat saat AUTH_ENABLED=true, karena browser
+    // tidak pernah menempelkan header Authorization ke document request.
+    // Fail-fast konfigurasi di atas TETAP berlaku untuk semua path
+    // (miscofig deployment harus tetap gagal keras, bukan 401 diam-diam).
+    if (url.pathname.startsWith('/api/')) {
+      const auth = await checkAuth(request, env);
+      if (!auth.ok) return unauthorized(auth.locked);
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/chat') {
       return handleChat(request, env);
     }
