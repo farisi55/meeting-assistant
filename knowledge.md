@@ -1,6 +1,6 @@
 ---
 project: meeting-assistant
-version: 1.0.6
+version: 1.0.7
 source: prd
 last_updated: 2026-09-26
 project_shape: fullstack
@@ -125,9 +125,17 @@ external_assets: false
   with no `Authorization` header is not counted as a failed attempt; a
   successful auth clears the counter. The browser stores its copy of the
   token in `localStorage` under `meeting-assistant.auth-token` (read by
-  `public/providers.js`, helper `setStoredAuthToken`) — a deliberate
+  `public/providers.js`, helper `setStoredAuthToken`; entered by the user
+  in the "Akses API" panel from `public/app.js`) — a deliberate
   single-user, personal-device choice: the token belongs to the same
   person who owns the browser profile.
+- Auth scope: enforced **only on `/api/*` routes**. The static frontend
+  shell is served unauthenticated even when `AUTH_ENABLED=true`, because a
+  browser never attaches an `Authorization` header to a document navigation
+  (Bearer has no native login prompt as Basic did) — guarding the shell
+  would 401 every page load with no way in. No secrets exist in the
+  frontend; the API stays guarded. The fail-fast config check (above) still
+  applies to **every** path so a broken deployment fails loudly everywhere.
 - Webhook inbound verification: none — no inbound webhooks
 - Request / response schemas:
   - `POST /api/chat` — request: `{ messages, provider?, model?,

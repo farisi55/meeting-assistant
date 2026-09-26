@@ -11,7 +11,12 @@ AUTH_ENABLED = "true"
 [assets]
 directory = "./public"
 binding = "ASSETS"
-run_worker_first = true # supaya auth (Bearer token) juga menjaga frontend, bukan cuma /api/*
+# Worker dipanggil dulu untuk SEMUA request (fail-fast konfigurasi auth +
+# routing /api/*), asset statis diserve lewat env.ASSETS di akhir handler.
+# Auth sendiri hanya diterapkan di route /api/* — shell frontend harus
+# tetap termuat tanpa token (browser tak pernah kirim Authorization saat
+# navigasi document). Token diisi lewat panel "Akses API" di UI.
+run_worker_first = true
 
 # Lockout auth (maks 3 percobaan gagal, reset otomatis 15 menit).
 # Buat dulu: wrangler kv namespace create AUTH_KV — lalu tempel id-nya di bawah.

@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
-knowledge_version: 1.0.6
-changelog_version: 1.0.11
+knowledge_version: 1.0.7
+changelog_version: 1.0.12
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -423,3 +423,36 @@ simple_mode: true
   - [TEST] Mutation verification: (A) `timingSafeEqual` → naive byte check → exactly 2 tests failed (tokensMatch unit + source guardrail); (B) `checkAuth` bypass `correct = true` → exactly 3 failed (correct/wrong-token, lockout, counter-reset); each reverted individually, 68/68 green after restore
 - **Notes:** No git remote — `git pull/push origin dev` N/A (pull failed, expected); merge is local to `dev`. Deliberately untouched: `prd.md` still documents Basic Auth and `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` (original PRD, not code/test config — developer may want an errata note since the requirement changed out-of-band). `.kilo/worktrees/dust-detail/` is an untracked local snapshot still holding the old Basic-auth code — not part of the tracked codebase, safe to delete. Pre-existing observations stand (ESLint named in §4 but absent; POST body parse has no Content-Type guard/try/catch — #003). New observation for #016: the `ASSETS` binding answers 404 for `/` and `/index.html` in the test runtime even when auth passes — no prior test asserted it, so status vs. baseline is unknown; unit tests keep using synthetic `ASSETS`.
 - **Knowledge drift:** UPDATE REQUIRED: @knowledge §3 (state-management/KV/KAD wording → Bearer), §5 (Bearer auth contract, `BASIC_AUTH_TOKEN` fail-fast exception, localStorage key), §8 (required env vars), §9 (secret-comparison policy → constant-time) — all four edits applied this task; version bumped 1.0.5 → 1.0.6, `knowledge_version` synced.
+
+### Task #010B — Auth: Token Input UI + API-Scoped Auth Guard ✅
+- **Completed:** 2026-09-26
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-010b-token-ui-api-auth-scope
+- **Files created / modified:**
+  - `public/app.js` — **modified**: `mountAuthPanel(root)` (masked `type=password` input, Simpan/Hapus, `role=status` line, `role=alert` validation; writes/clears via `setStoredAuthToken`, input wiped after save, stored token never echoed back); `initApp` now mounts three panels (composite `destroy()` unchanged); header comment updated
+  - `worker.js` — **modified**: `checkAuth` invoked only when `url.pathname.startsWith('/api/')`; static/other paths served without auth; fail-fast config check stays global (runs before everything); header comment documents the scope rationale
+  - `test/worker.test.js` — +3 tests in `auth scope: API only (Task #010B)` (shell 200 with no header while auth on; `/api/*` still 401; even a **wrong** token on a non-API path doesn't touch the lockout counter); fail-fast correct/wrong/legacy and lockout-reset tests moved to `/api/ping` paths (auth no longer runs on `/`)
+  - `test/frontend/auth-panel.test.js` — **created**: 6 tests (render + masked input, save→localStorage+input cleared+no echo, empty→visible error+no write, clear, pre-stored status without revealing value, `initApp` triple mount + composite destroy)
+  - `README.md`, `wrangler.toml` (comment) — new login flow documented (auth guards `/api/*`, shell public, token entered in the panel)
+  - `knowledge.md` — §5 auth scope + panel entry; version → 1.0.7
+- **Acceptance criteria met:**
+  - [x] Token panel: masked input + Simpan + Hapus + status; save writes localStorage and clears the input; stored token never displayed (asserted `root.textContent` does not contain the token)
+  - [x] Empty/whitespace save → visible `role=alert` message ("Token tidak boleh kosong"), `getStoredAuthToken()` stays null (nothing written)
+  - [x] `initApp` mounts the third panel; `destroy()` still composite; pre-existing context + steer `initApp` tests pass **unmodified**
+  - [x] With `AUTH_ENABLED=true` and no token: `GET /` → 200 (shell served) while `POST /api/chat` → 401; lockout still counts only `/api/*` (3 wrong → 429 covered by #006 tests, now on `/api` paths)
+  - [x] Unit tests written and passing (9 new); isolated — localStorage cleared in both hooks, fresh root per test, KV key deleted in `afterEach`
+  - [x] README + `wrangler.toml` + @knowledge §5 describe the flow
+- **Security gate:** STANDARD — all checks passed [— HIGH-RISK OVERRIDE: modifies auth scope] [— simple_mode: 0 items skipped; security baseline never skipped]
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped (no skippable items in BASIC/STANDARD for this shape)]
+- **Observability gate:** N/A — Phase 7 only
+- **Regression:** Passed 77 (68 baseline + 9 new), 0 failed (`npm test` → `vitest run`, 9 files, 2.73s); mutation verification: 2 rounds (see Decisions); `node --check` OK on all changed JS; pre-commit hook re-verified (throwaway `verify-hook.pem` staged with `-f` → exit 1, no commit)
+- **Decisions made:**
+  - [ARCH] Auth scoped in **code** (`url.pathname.startsWith('/api/')`) rather than by flipping `run_worker_first = false` — explicit, unit-testable, and independent of asset-serving config; `run_worker_first = true` kept so fail-fast config + routing stay on one code path for every request. Trade-off recorded: static shell becomes public — acceptable because the frontend contains no secrets (keys never reach the browser, per §3) and Bearer cannot be attached to document requests
+  - [API] Fail-fast misconfig check deliberately **stays global** (all paths) while auth is API-only: a deployment with `AUTH_ENABLED=true` and no `BASIC_AUTH_TOKEN` must still fail loudly on any request, not silently serve the shell — existing "fails closed for static assets" test keeps passing unmodified
+  - [PATTERN] Panel reuses `providers.js`'s `setStoredAuthToken`/`getStoredAuthToken` (the storage-key owner) instead of taking an injectable `storage` option like `mountContextPanel` — one source of truth for the key; jsdom's real localStorage cleared in both hooks is the isolation mechanism
+  - [SEC] Input `type=password` + `autocomplete=off`; value trimmed, blank rejected pre-write; input cleared after save and the stored value is never re-rendered (only a presence status) — token exposure risk limited to the moment the user types it
+  - [TEST] Strengthened the non-API-path lockout test mid-task: it originally sent a *missing* header (which was never counted anyway, so it passed even with global auth — mutation A only caught 1 test); it now sends a **wrong** token to `/`, so removing the scope guard fails exactly 2 tests
+  - [TEST] Mutation verification: (A) remove `/api/` scope → exactly 2 failed (shell-served + wrong-token-non-API); (B) remove the empty-token guard → exactly 1 failed; each reverted, 77/77 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge local to `dev`. **Pre-existing gap, untouched by design:** `public/index.html` and `public/styles.css` still do not exist (flagged since #007/#008), so no browser can render any panel yet — the shell is Task #016's E2E concern; this task only guarantees it *would* load with auth on. Forward impact: `public/app.js` also modified by #011, #012, #015 (tracked, intentional).
+- **Knowledge drift:** UPDATE REQUIRED: @knowledge §5 — added the auth-scope rule (`/api/*` only, static shell public, rationale) and the token-entry panel (edit applied this task); version bumped 1.0.6 → 1.0.7, `knowledge_version` synced.
