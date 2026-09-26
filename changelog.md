@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
-knowledge_version: 1.0.5
-changelog_version: 1.0.10
+knowledge_version: 1.0.6
+changelog_version: 1.0.11
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,26 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #010A — Auth: Bearer Token (BASIC_AUTH_TOKEN) Replacing Basic User/Pass
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Replace Basic user/pass auth with a single high-entropy bearer secret: client sends `Authorization: Bearer <UUID token>`, Worker verifies against `BASIC_AUTH_TOKEN` using constant-time comparison; reuse the existing KV lockout (3 gagal/IP, 15 menit) and the fail-fast config pattern; `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` removed from code, tests, and docs. Out-of-band insertion requested by developer, ordered before #011.
-- **Files to create / modify:** `worker.js`, `test/worker.test.js`, `public/providers.js`, `test/frontend/providers.test.js`, `vitest.worker.config.js`, `.dev.vars.example`, `wrangler.toml`, `README.md`, `knowledge.md`
-- **Acceptance criteria:**
-  - [ ] Correct `Authorization: Bearer <token>` passes auth when `AUTH_ENABLED=true`; missing/wrong token → 401, and wrong attempts feed the same lockout counter (4th wrong → 429 via KV; a passing request clears it)
-  - [ ] `AUTH_ENABLED=true` without `BASIC_AUTH_TOKEN` → fail-fast 500 naming `BASIC_AUTH_TOKEN`; `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` appear nowhere in code or test config (grep-clean)
-  - [ ] Token comparison uses constant-time comparison (`crypto.subtle.timingSafeEqual`); @knowledge §5 (auth contract) + §8 (env vars) + §9 (secret-comparison policy) updated this task
-  - [ ] Frontend stays usable with auth enabled: `providers.js` attaches a stored token from localStorage as `Authorization: Bearer` when configured
-  - [ ] Unit tests written and passing (worker auth/lockout/fail-fast + providers header attach), hermetic bindings updated, test isolated
-  - [ ] `.dev.vars.example`, `wrangler.toml` comments, and `README.md` show only the token scheme (no stale Basic-auth instructions)
-- **Dependencies:** Task #003, Task #006, Task #009
-- **Decisions made:** _(fill after execution — never leave blank)_
-
----
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #011 — Feature: Interview-Practice Mode
 - **Phase:** Phase 3 — Core Features
@@ -42,6 +22,12 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #008, Task #009
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+---
+
+## [NEXT TASKS]
+
+### Phase 3 — Core Features
 
 #### Task #012 — Audio → Transcript → Response Pipeline Wiring
 - **Phase:** Phase 3 — Core Features
@@ -401,3 +387,39 @@ simple_mode: true
   - [TEST] Mutation verification: removed the forbid sentence from `STEER_SYSTEM_PROMPT` → exactly the prompt test failed; made `copyButton.hidden` never flip → exactly the 3 copy-dependent tests failed; each reverted, 62/62 green after restore
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. **Baseline incident (pre-Step-3):** developer's local `.dev.vars` (created 16:57 from README instructions, real keys, `AUTH_ENABLED=false`) was being loaded into the worker test runtime → auth disabled in suite → `handleChat` made **real outbound calls with real API keys** (402 upstream passthrough; 2 baseline tests red, suite ~4s). Fixed by pinning all sensitive vars in `vitest.worker.config.js` `miniflare.bindings`; verified hermetic both with and without `.dev.vars` present. Forward impact: `public/app.js` also modified by #011, #012, #015 (tracked, intentional).
 - **Knowledge drift:** UPDATE REQUIRED: @knowledge §9 — new known-limitation entry: `vitest-pool-workers` loads local `.dev.vars` into the test runtime; `vitest.worker.config.js` pins sensitive vars to keep the suite hermetic (edit applied this task); version bumped 1.0.3 → 1.0.4, `knowledge_version` synced.
+
+### Task #010A — Auth: Bearer Token (BASIC_AUTH_TOKEN) Replacing Basic User/Pass ✅
+- **Completed:** 2026-09-26
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-010a-bearer-token-auth
+- **Files created / modified:**
+  - `worker.js` — auth rewritten: `authConfigError` now requires `BASIC_AUTH_TOKEN`; new exported `tokensMatch(candidate, expected)` (length pre-check + `crypto.subtle.timingSafeEqual`); `checkAuth` parses `Authorization: Bearer <token>` (no header → not counted, wrong token → counted); 401 challenge `WWW-Authenticate: Bearer realm="personal-assistant"`; header docs → token scheme
+  - `public/providers.js` — **modified**: exports `AUTH_TOKEN_STORAGE_KEY` / `getStoredAuthToken` / `setStoredAuthToken`; `chat()` and `transcribe()` attach `Authorization: Bearer <token>` from localStorage when configured; still zero module-level mutable state
+  - `test/worker.test.js` — auth/lockout/fail-fast suites ported to Bearer (+ legacy `Basic` scheme now rejected test, "valid token reaches handler" SELF test, `tokensMatch` unit cases)
+  - `test/frontend/providers.test.js` — +4 tests: token attached on chat/transcribe, none when unconfigured, clearing works; localStorage cleared in beforeEach+afterEach
+  - `test/frontend/auth-guardrails.test.js` — **created**: source scans enforcing the grep-clean criterion (retired vars absent from code/config/docs) and the constant-time-comparison criterion
+  - `vitest.worker.config.js` — hermetic binding `BASIC_AUTH_TOKEN: 'test-bearer-token-1234'` replaces dummy USER/PASS
+  - `.dev.vars.example`, `wrangler.toml` (comments), `README.md` — token scheme only, incl. localStorage key + `openssl rand -hex 32` guidance
+  - `CONTRIBUTING.md`, `test/frontend/logging-guardrail.test.js` — credential example + guardrail assertion updated (`BASIC_AUTH_PASS` → `BASIC_AUTH_TOKEN`) — files outside the task list, required so docs don't keep retired names and the #004 gate test keeps passing (see Decisions)
+  - `knowledge.md` — §3/§5/§8/§9 updated (see Knowledge drift)
+- **Acceptance criteria met:**
+  - [x] Correct `Authorization: Bearer <token>` passes auth when `AUTH_ENABLED=true`; missing/wrong token → 401, wrong attempts feed the same KV lockout (3 wrong → 4th request 429 even with the correct token; a passing request clears it to `null`) — tests: `worker auth`, `accepts a correct Bearer token...`, `locks the IP after 3 failed attempts`, `a successful login resets the failure counter`
+  - [x] `AUTH_ENABLED=true` without `BASIC_AUTH_TOKEN` → fail-fast 500 naming `BASIC_AUTH_TOKEN` (value never leaked, no `WWW-Authenticate`); `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` grep-clean in code/test config — enforced by `test/frontend/auth-guardrails.test.js` (scans worker.js, public/*.js, test/**/*.js, vitest configs, wrangler.toml, .dev.vars.example, README/CONTRIBUTING/knowledge)
+  - [x] Token comparison uses `crypto.subtle.timingSafeEqual` (runtime-probed: BufferSource-only, same-length, returns boolean) inside exported `tokensMatch`; @knowledge §5 + §8 + §9 updated this task
+  - [x] Frontend usable with auth enabled: `providers.js` attaches the localStorage token as `Authorization: Bearer` on `/api/chat` and `/api/transcribe` (4 new tests)
+  - [x] Unit tests written and passing (worker auth/lockout/fail-fast + providers header attach); hermetic bindings updated; tests isolated (synthetic env per test, KV teardown in `afterEach`, localStorage cleared both ways, `tokensMatch` pure)
+  - [x] `.dev.vars.example`, `wrangler.toml` comments, and `README.md` show only the token scheme — no stale Basic-auth instructions remain in tracked code/config/docs
+- **Security gate:** STANDARD — all checks passed [— HIGH-RISK OVERRIDE: auth/session/credentials task, Phase 3 would otherwise still be STANDARD but override makes it non-negotiable regardless of simple_mode] [— simple_mode: 0 items skipped (security baseline is never skipped)]
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped (no simple_mode-skippable items exist in the BASIC/STANDARD tiers for this shape)]
+- **Observability gate:** N/A — Phase 7 only
+- **Regression:** Passed 68 (62 baseline + 6 net), 0 failed (`npm test` → `vitest run`, 8 files, 2.40s); mutation verification: 2 rounds (see Decisions); `node --check` OK on all changed JS; pre-commit hook re-verified (throwaway `verify-hook.pem` staged with `-f` → `COMMIT DITOLAK`, exit 1, no commit created)
+- **Decisions made:**
+  - [API] Auth scheme switched Basic(user/pass) → single Bearer secret `BASIC_AUTH_TOKEN` per out-of-band developer request; breaking-by-design and accepted as such — @knowledge §9 states no versioning/backward-compat guarantee exists while there are no external consumers, so no dual-scheme shim was added (old `Basic` header now just 401s, covered by test)
+  - [ARCH] Kept a `WWW-Authenticate` challenge on 401, changed `Basic realm=...` → `Bearer realm="personal-assistant"` — spec-correct for Bearer (RFC 6750) and preserves the existing "401 carries a challenge" contract; dropping the header entirely was considered and rejected as a silent behavior change with no benefit
+  - [SEC] `tokensMatch` pre-checks byte length before `crypto.subtle.timingSafeEqual` (the API throws on differing lengths — verified in the workerd test runtime) — leaks only token length, never content; `typeof expected === 'string' && expected.length > 0` guard fails closed if the env var were somehow empty
+  - [PATTERN] Frontend token lives in `localStorage` (`meeting-assistant.auth-token`) because the acceptance criterion names it explicitly; this narrows Task #008's broader "localStorage never holds tokens" rationale to a deliberate single-user, personal-device exception — recorded in @knowledge §5 rather than left implicit. `providers.js` still keeps zero module-level mutable state (token re-read per request)
+  - [TEST] New `test/frontend/auth-guardrails.test.js` (Node-side, not in the task's file list) exists because two acceptance criteria are source-level and unverifiable from workerd: it makes "grep-clean" and "uses timingSafeEqual" executable regressions — same rationale as #004's guardrail file. It excludes `prd.md` (historical requirement doc) and `changelog.md` (quotes retired names in past entries) from the scan
+  - [TEST] Mutation verification: (A) `timingSafeEqual` → naive byte check → exactly 2 tests failed (tokensMatch unit + source guardrail); (B) `checkAuth` bypass `correct = true` → exactly 3 failed (correct/wrong-token, lockout, counter-reset); each reverted individually, 68/68 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A (pull failed, expected); merge is local to `dev`. Deliberately untouched: `prd.md` still documents Basic Auth and `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` (original PRD, not code/test config — developer may want an errata note since the requirement changed out-of-band). `.kilo/worktrees/dust-detail/` is an untracked local snapshot still holding the old Basic-auth code — not part of the tracked codebase, safe to delete. Pre-existing observations stand (ESLint named in §4 but absent; POST body parse has no Content-Type guard/try/catch — #003). New observation for #016: the `ASSETS` binding answers 404 for `/` and `/index.html` in the test runtime even when auth passes — no prior test asserted it, so status vs. baseline is unknown; unit tests keep using synthetic `ASSETS`.
+- **Knowledge drift:** UPDATE REQUIRED: @knowledge §3 (state-management/KV/KAD wording → Bearer), §5 (Bearer auth contract, `BASIC_AUTH_TOKEN` fail-fast exception, localStorage key), §8 (required env vars), §9 (secret-comparison policy → constant-time) — all four edits applied this task; version bumped 1.0.5 → 1.0.6, `knowledge_version` synced.

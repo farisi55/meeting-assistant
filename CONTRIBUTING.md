@@ -17,7 +17,7 @@ Termasuk (tidak terbatas):
   `request.json()`
 - file audio & hasil transkrip `/api/transcribe`
 - konteks yang diunggah (CV, job description, product knowledge)
-- header `Authorization`, nilai `BASIC_AUTH_USER` / `BASIC_AUTH_PASS`
+- header `Authorization`, nilai `BASIC_AUTH_TOKEN`
 - nilai `*_API_KEY` (OpenRouter, Groq, Mistral, SambaNova)
 
 **Alasan:** `knowledge.md` §8 — log produksi dibaca lewat

@@ -10,7 +10,7 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: './wrangler.toml' },
       // Kredensial dummy khusus test (bukan rahasia) supaya jalur auth
-      // "kedua var ter-set" bisa diuji lewat SELF.fetch; skenario var hilang
+      // "token ter-set" bisa diuji lewat SELF.fetch; skenario var hilang
       // diuji lewat worker.fetch dengan env sintetis di test/worker.test.js.
       //
       // HERMETIK: bindings di bawah WAJIB menimpa .dev.vars lokal (yang
@@ -20,8 +20,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           AUTH_ENABLED: 'true',
-          BASIC_AUTH_USER: 'test-user',
-          BASIC_AUTH_PASS: 's3cr3t-pass',
+          BASIC_AUTH_TOKEN: 'test-bearer-token-1234',
           // String kosong = falsy di worker.js → provider di-skip, tidak
           // pernah ada outbound call dari test suite.
           OPENROUTER_API_KEY: '',

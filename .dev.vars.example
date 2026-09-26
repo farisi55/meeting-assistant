@@ -8,6 +8,8 @@ GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxx
 MISTRAL_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 SAMBANOVA_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 
-# Hanya perlu diisi kalau AUTH_ENABLED=true:
-BASIC_AUTH_USER=
-BASIC_AUTH_PASS=
+# Hanya perlu diisi kalau AUTH_ENABLED=true.
+# Token acak tinggi-entropi: buat dengan `openssl rand -hex 32`
+# (atau `uuidgen`), lalu pakai nilai yang sama di localStorage frontend
+# (key: meeting-assistant.auth-token) — lihat README §Konfigurasi.
+BASIC_AUTH_TOKEN=

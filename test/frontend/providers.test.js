@@ -1,9 +1,17 @@
 // Tests for public/providers.js (Task #009) — /api/chat + /api/transcribe
 // client wrapper: success resolves with reply text + `_provider`, every
 // failure state surfaces as a catchable ProvidersError (knowledge §5).
-// Isolation: each test builds its own fetchFn closure; no shared or global state.
-import { describe, expect, it } from 'vitest';
-import { ProvidersError, chat, transcribe } from '../../public/providers.js';
+// Isolation: each test builds its own fetchFn closure; no shared or global
+// state — except the bearer-token describe below, which clears the one
+// localStorage key it touches in beforeEach AND afterEach (Task #010A).
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  ProvidersError,
+  chat,
+  getStoredAuthToken,
+  setStoredAuthToken,
+  transcribe,
+} from '../../public/providers.js';
 
 const okJson = (data) => ({ ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data) });
 const errResponse = (status, bodyText) => ({
@@ -167,5 +175,54 @@ describe('providers client helper (Task #009)', () => {
       name: 'ProvidersError',
       code: 'NETWORK',
     });
+  });
+});
+
+describe('bearer token attach (Task #010A)', () => {
+  // localStorage adalah satu-satunya state yang dibagikan di sini —
+  // dibersihkan sebelum (setup) dan sesudah (teardown) tiap test.
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  const chatFetch = () =>
+    makeFetch(async () => okJson({ choices: [{ message: { content: 'ok' } }], _provider: 'groq' }));
+
+  it('attaches Authorization: Bearer when a token is stored in localStorage', async () => {
+    setStoredAuthToken('token-pengguna');
+    const fetchFn = chatFetch();
+
+    await chat([{ role: 'user', content: 'x' }], { fetchFn });
+
+    expect(getStoredAuthToken()).toBe('token-pengguna');
+    expect(fetchFn.calls[0][1].headers.Authorization).toBe('Bearer token-pengguna');
+    expect(fetchFn.calls[0][1].headers['Content-Type']).toBe('application/json');
+  });
+
+  it('sends no Authorization header when no token is configured', async () => {
+    const fetchFn = chatFetch();
+
+    await chat([{ role: 'user', content: 'x' }], { fetchFn });
+
+    expect(getStoredAuthToken()).toBeNull();
+    expect(fetchFn.calls[0][1].headers.Authorization).toBeUndefined();
+  });
+
+  it('attaches the stored token to /api/transcribe as well', async () => {
+    setStoredAuthToken('token-transcribe');
+    const fetchFn = makeFetch(async () => okJson({ text: 'hasil' }));
+
+    await transcribe(new Blob(['audio']), { fetchFn });
+
+    expect(fetchFn.calls[0][1].headers.Authorization).toBe('Bearer token-transcribe');
+  });
+
+  it('clearing the token (setStoredAuthToken(null)) makes later calls send none', async () => {
+    setStoredAuthToken('token-singkat');
+    setStoredAuthToken(null);
+    expect(getStoredAuthToken()).toBeNull();
+
+    const fetchFn = chatFetch();
+    await chat([{ role: 'user', content: 'x' }], { fetchFn });
+    expect(fetchFn.calls[0][1].headers.Authorization).toBeUndefined();
   });
 });

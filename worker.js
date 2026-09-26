@@ -8,7 +8,8 @@
  *   POST /api/chat        -> LLM, fallback: OpenRouter > Groq > Mistral > SambaNova
  *   POST /api/transcribe  -> STT via Groq Whisper (satu-satunya yang gratis di daftar ini)
  *
- * Auth: Basic Auth toggle via AUTH_ENABLED, plus lockout sederhana
+ * Auth: Bearer token toggle via AUTH_ENABLED (client kirim
+ * `Authorization: Bearer <BASIC_AUTH_TOKEN>`), plus lockout sederhana
  * (maks. 3 percobaan gagal per IP, reset otomatis setelah 15 menit lewat
  * KV TTL) begitu AUTH_KV di-bind. Tanpa binding AUTH_KV, auth tetap jalan
  * tapi tanpa proteksi brute-force.
@@ -23,14 +24,16 @@
  *   lockout otomatis pakai simulasi lokal Miniflare, tidak perlu setup
  *   tambahan untuk dev)
  *
+ * LOKAL (dengan auth): AUTH_ENABLED=true + BASIC_AUTH_TOKEN=<token acak>,
+ * lalu frontend ambil token yang sama dari localStorage (knowledge §5).
+ *
  * PUBLIK di Cloudflare (dengan auth + lockout):
  *   wrangler kv namespace create AUTH_KV   # salin id-nya ke wrangler.toml
  *   wrangler secret put OPENROUTER_API_KEY
  *   wrangler secret put GROQ_API_KEY
  *   wrangler secret put MISTRAL_API_KEY
  *   wrangler secret put SAMBANOVA_API_KEY
- *   wrangler secret put BASIC_AUTH_USER
- *   wrangler secret put BASIC_AUTH_PASS
+ *   wrangler secret put BASIC_AUTH_TOKEN    # token acak: openssl rand -hex 32
  *   # set AUTH_ENABLED = "true" di [vars] wrangler.toml, lalu:
  *   wrangler deploy
  *
@@ -89,7 +92,7 @@ function authRequired(env) {
  */
 function authConfigError(env) {
   if (!authRequired(env)) return null;
-  const missing = ['BASIC_AUTH_USER', 'BASIC_AUTH_PASS'].filter((name) => !env[name]);
+  const missing = ['BASIC_AUTH_TOKEN'].filter((name) => !env[name]);
   if (missing.length === 0) return null;
   return new Response(
     `Konfigurasi auth tidak lengkap: ${missing.join(', ')} belum di-set. ` +
@@ -99,16 +102,32 @@ function authConfigError(env) {
 }
 
 /**
- * Cek Basic Auth + lockout. Mengembalikan { ok, locked }.
+ * Bandingkan kandidat token dengan token yang benar secara constant-time
+ * (crypto.subtle.timingSafeEqual) — tanpa cabang per-byte, jadi timing
+ * respons tidak membocorkan isi token. Panjang dicek dulu karena API-nya
+ * mewajibkan dua buffer sama panjang; panjang token acak bukan rahasia,
+ * isinya yang harus tetap tertutup.
+ */
+function tokensMatch(candidate, expected) {
+  if (typeof expected !== 'string' || expected.length === 0) return false;
+  const enc = new TextEncoder();
+  const a = enc.encode(candidate);
+  const b = enc.encode(expected);
+  if (a.length !== b.length) return false;
+  return crypto.subtle.timingSafeEqual(a, b);
+}
+
+/**
+ * Cek Bearer token + lockout. Mengembalikan { ok, locked }.
  * - Belum ada header Authorization sama sekali -> ok:false, locked:false
  *   (ini baru "silakan login", BUKAN percobaan gagal — supaya page load
  *   pertama tidak ikut kehitung ke lockout)
  * - Header ada tapi salah -> dihitung sebagai percobaan gagal
  * - 3x salah dari IP yang sama -> locked:true, respons berikutnya 429
- *   walau kredensial yang dikirim sudah benar, sampai TTL habis
+ *   walau token yang dikirim sudah benar, sampai TTL habis
  */
 async function checkAuth(request, env) {
-  // PII-SAFE LOGGING: header Authorization, user, dan password tidak boleh
+  // PII-SAFE LOGGING: header Authorization dan nilai token tidak boleh
   // pernah masuk console.* — lihat CONTRIBUTING.md & knowledge §8.
   if (!authRequired(env)) return { ok: true, locked: false };
 
@@ -122,23 +141,12 @@ async function checkAuth(request, env) {
   }
 
   const header = request.headers.get('Authorization') || '';
-  const [scheme, encoded] = header.split(' ');
-  if (scheme !== 'Basic' || !encoded) {
+  const [scheme, token] = header.split(' ');
+  if (scheme !== 'Bearer' || !token) {
     return { ok: false, locked: false };
   }
 
-  let decoded = '';
-  try {
-    decoded = atob(encoded);
-  } catch {
-    return { ok: false, locked: false };
-  }
-  const sep = decoded.indexOf(':');
-  const user = decoded.slice(0, sep);
-  const pass = decoded.slice(sep + 1);
-  // Perbandingan plaintext biasa -- keputusan sadar untuk skala personal-use
-  // ini, bukan oversight (lihat prd.md §10 riwayat keputusan).
-  const correct = user === env.BASIC_AUTH_USER && pass === env.BASIC_AUTH_PASS;
+  const correct = tokensMatch(token, env.BASIC_AUTH_TOKEN);
 
   if (hasKv) {
     if (correct) {
@@ -165,7 +173,7 @@ function unauthorized(locked) {
   }
   return new Response('Unauthorized', {
     status: 401,
-    headers: { 'WWW-Authenticate': 'Basic realm="personal-assistant"' },
+    headers: { 'WWW-Authenticate': 'Bearer realm="personal-assistant"' },
   });
 }
 
@@ -295,5 +303,5 @@ export default {
   },
 };
 
-// Diekspor hanya untuk unit test (pemeriksaan fail-fast konfigurasi auth).
-export { authConfigError };
+// Diekspor hanya untuk unit test (fail-fast konfigurasi auth & perbandingan token).
+export { authConfigError, tokensMatch };

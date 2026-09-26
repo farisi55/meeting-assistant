@@ -64,7 +64,7 @@ describe('no-PII-logging guardrail (Task #004)', () => {
   it('documents the no-PII-logging rule in CONTRIBUTING.md', () => {
     const doc = readFileSync(resolve(process.cwd(), 'CONTRIBUTING.md'), 'utf8');
     expect(doc).toContain('console.log');
-    expect(doc).toContain('BASIC_AUTH_PASS');
+    expect(doc).toContain('BASIC_AUTH_TOKEN');
     expect(doc).toContain('transkrip');
     expect(doc).toContain('logging-guardrail');
   });
