@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.7
-changelog_version: 1.0.12
+changelog_version: 1.0.13
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -22,8 +22,6 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #008, Task #009
 - **Decisions made:** _(fill after execution — never leave blank)_
-
----
 
 ## [NEXT TASKS]
 
@@ -456,3 +454,26 @@ simple_mode: true
   - [TEST] Mutation verification: (A) remove `/api/` scope → exactly 2 failed (shell-served + wrong-token-non-API); (B) remove the empty-token guard → exactly 1 failed; each reverted, 77/77 green after restore
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge local to `dev`. **Pre-existing gap, untouched by design:** `public/index.html` and `public/styles.css` still do not exist (flagged since #007/#008), so no browser can render any panel yet — the shell is Task #016's E2E concern; this task only guarantees it *would* load with auth on. Forward impact: `public/app.js` also modified by #011, #012, #015 (tracked, intentional).
 - **Knowledge drift:** UPDATE REQUIRED: @knowledge §5 — added the auth-scope rule (`/api/*` only, static shell public, rationale) and the token-entry panel (edit applied this task); version bumped 1.0.6 → 1.0.7, `knowledge_version` synced.
+
+### Task #010C — Docs: README "Login & Autentikasi" FAQ ✅
+- **Completed:** 2026-09-26
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-010c-readme-login-faq
+- **Files created / modified:**
+  - `README.md` — **modified**: new top-level `## Login & autentikasi` section (no user/pass; 4-step flow: auth off locally → generate `openssl rand -hex 32` + store server-side → enter in the **Akses API** panel → done; guarded-vs-public path table with the rationale; troubleshooting table for 401 / fail-fast 500 / lockout 429 / lost token / missing shell; curl example with `Authorization: Bearer`; DevTools localStorage check); old "Frontend & token" paragraph replaced by a link to the new section
+- **Acceptance criteria met:**
+  - [x] Section answers every listed question: no username/password, token generation, server storage (`.dev.vars` + `wrangler secret`), panel entry, guarded vs. public paths + rationale, change/lost token, 401/500/429 meanings, curl example with the Bearer header
+  - [x] No stale Basic-auth instructions in README — enforced by the existing `test/frontend/auth-guardrails.test.js` source scan (green)
+  - [x] Older "Frontend & token" paragraph replaced by an anchor link to the new section — no duplicated/contradicting text
+  - [x] Regression: `npm test` passes (README is scanned by the guardrail test)
+- **Security gate:** STANDARD — all checks passed (docs-only diff: no code path touched; no real secret values appear in README — only command examples) [— HIGH-RISK OVERRIDE not triggered: documentation of auth, zero auth code changed; tier identical to Phase 3's own STANDARD] [— simple_mode: 0 items skipped]
+- **Scalability gate:** STANDARD — all checks passed (every applicable item N/A: README-only change, no I/O, no endpoints, no state) [— simple_mode: 0 items skipped]
+- **Observability gate:** N/A — Phase 7 only
+- **Regression:** Passed 77 (77 baseline, unchanged), 0 failed (`npm test` → `vitest run`, 9 files)
+- **Decisions made:**
+  - [API] Troubleshooting written against the **actual** response texts produced by `worker.js` (`401 Unauthorized`, `500 Konfigurasi auth tidak lengkap: BASIC_AUTH_TOKEN`, `429 Terlalu banyak percobaan gagal. Coba lagi dalam 15 menit.`) rather than paraphrases, so a user can match an error screen to its row verbatim
+  - [PATTERN] Login section placed as a top-level `##` (not buried under Konfigurasi) and linked from the config table — makes it the single obvious destination for any login question; the superseded paragraph became an anchor link to avoid two sources of truth drifting apart
+  - [TEST] README deliberately includes the known `public/index.html` gap (row "Halaman tidak termuat (404)" → points at Task #016) so the FAQ also pre-empts the "why won't the page open" question that is adjacent to login
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge local to `dev`. Anchor link `#login--autentikasi` verified against GitHub's slug rule (space → `-`, `&` dropped). `styles.css`/`index.html` are referenced only as *missing* (per #007 observation), never as existing files.
+- **Knowledge drift:** none — README is not part of @knowledge §3's tree; no library (§2), naming (§4), API contract (§5), domain rule (§7), or infra (§8) change.
