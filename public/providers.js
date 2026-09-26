@@ -2,6 +2,34 @@
 // wraps POST /api/chat and POST /api/transcribe, surfaces the `_provider`
 // field on success and converts every failure into a catchable ProvidersError.
 
+/** localStorage key holding the bearer token the Worker verifies (knowledge §5). */
+export const AUTH_TOKEN_STORAGE_KEY = 'meeting-assistant.auth-token';
+
+/** Read the stored bearer token, or null when auth is not configured. */
+export function getStoredAuthToken() {
+  try {
+    return globalThis.localStorage?.getItem(AUTH_TOKEN_STORAGE_KEY) || null;
+  } catch {
+    return null; // storage unavailable (privacy mode) → treat as "not configured"
+  }
+}
+
+/** Store the bearer token for subsequent API calls; null/empty clears it. */
+export function setStoredAuthToken(token) {
+  try {
+    if (token) globalThis.localStorage?.setItem(AUTH_TOKEN_STORAGE_KEY, String(token));
+    else globalThis.localStorage?.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    // storage unavailable → nothing persisted, next call simply sends no token
+  }
+}
+
+/** Authorization headers for the Worker: Bearer token when stored, else none. */
+function authHeaders() {
+  const token = getStoredAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 /** Catchable error for all API failure states; carries status/body/endpoint for UI handling. */
 export class ProvidersError extends Error {
   /**
@@ -60,7 +88,8 @@ async function throwHttpError(res, endpoint) {
 /**
  * Call POST /api/chat (knowledge §5). Resolves with
  * { text, provider, raw } where `provider` is the response's `_provider`
- * field; rejects with ProvidersError on any failure state.
+ * field; rejects with ProvidersError on any failure state. Adds
+ * `Authorization: Bearer <token>` when a token is stored.
  */
 export async function chat(messages, options = {}) {
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -81,7 +110,7 @@ export async function chat(messages, options = {}) {
     '/api/chat',
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(payload),
       signal: buildSignal(timeoutMs, signal),
     },
@@ -112,7 +141,8 @@ export async function chat(messages, options = {}) {
 /**
  * Call POST /api/transcribe (knowledge §5) with a multipart file.
  * Resolves with { text, raw } (Groq Whisper `response_format: json`);
- * rejects with ProvidersError on any failure state.
+ * rejects with ProvidersError on any failure state. Adds
+ * `Authorization: Bearer <token>` when a token is stored.
  */
 export async function transcribe(file, options = {}) {
   if (!(file instanceof Blob)) {
@@ -132,6 +162,7 @@ export async function transcribe(file, options = {}) {
     '/api/transcribe',
     {
       method: 'POST',
+      headers: authHeaders(),
       body: form,
       signal: buildSignal(timeoutMs, signal),
     },

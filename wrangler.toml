@@ -11,9 +11,9 @@ AUTH_ENABLED = "true"
 [assets]
 directory = "./public"
 binding = "ASSETS"
-run_worker_first = true # supaya Basic Auth juga menjaga frontend, bukan cuma /api/*
+run_worker_first = true # supaya auth (Bearer token) juga menjaga frontend, bukan cuma /api/*
 
-# Lockout Basic Auth (maks 3 percobaan gagal, reset otomatis 15 menit).
+# Lockout auth (maks 3 percobaan gagal, reset otomatis 15 menit).
 # Buat dulu: wrangler kv namespace create AUTH_KV — lalu tempel id-nya di bawah.
 # Tanpa binding ini, auth tetap jalan tapi tanpa proteksi brute-force.
 [[kv_namespaces]]
@@ -22,4 +22,4 @@ id = "<isi setelah menjalankan: wrangler kv namespace create AUTH_KV>"
 
 # Secrets (jangan taruh di sini — pakai `wrangler secret put <NAMA>`):
 #   OPENROUTER_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, SAMBANOVA_API_KEY,
-#   BASIC_AUTH_USER, BASIC_AUTH_PASS
+#   BASIC_AUTH_TOKEN

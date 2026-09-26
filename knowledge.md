@@ -1,8 +1,8 @@
 ---
 project: meeting-assistant
-version: 1.0.5
+version: 1.0.6
 source: prd
-last_updated: 2026-09-25
+last_updated: 2026-09-26
 project_shape: fullstack
 simple_mode: true
 external_assets: false
@@ -29,7 +29,7 @@ external_assets: false
 - Frameworks: none — backend uses the native Workers `fetch` handler;
   frontend is vanilla JS
 - Database: none for application data. Workers KV (`AUTH_KV`) is used
-  narrowly for the Basic Auth lockout counter only — not application data
+  narrowly for the auth lockout counter only — not application data
 - Infrastructure: Cloudflare Workers, serverless, free plan
 - Container orchestration: none
 - Key third-party services: OpenRouter, Groq, Mistral (La Plateforme),
@@ -75,8 +75,8 @@ external_assets: false
 - Design patterns: Provider fallback chain (Chain-of-Responsibility-style)
   for LLM routing across `PROVIDERS`/`FALLBACK_ORDER` in `worker.js`
 - State management: client-side only (localStorage/IndexedDB); no
-  server-side session — Basic Auth is re-verified per request, and the
-  only server-side state is the KV lockout counter
+  server-side session — Bearer-token auth is re-verified per request, and
+  the only server-side state is the KV lockout counter
 - Data flow: Browser (capture audio) → chunk → `POST /api/transcribe`
   (Worker → Groq) → transcript → client assembles prompt (system:
   persona/CV/JD, user: transcript) → `POST /api/chat` (Worker → provider
@@ -93,9 +93,10 @@ external_assets: false
   - Client-side state (localStorage/IndexedDB) over a server-side
     database — matches the personal-use simplicity constraint and avoids
     server backup/RPO requirements entirely
-  - Basic Auth toggle via env var over Cloudflare Access as the default —
-    matches the literal "username+password" requirement; Access remains
-    available as an optional extra layer
+  - Auth toggle via env var over Cloudflare Access as the default — a
+    single high-entropy Bearer secret (`BASIC_AUTH_TOKEN`, Task #010A)
+    instead of the PRD's username+password pair; Access remains available
+    as an optional extra layer
 
 ## 4. Code Standards
 - Naming: files kebab-case; functions camelCase; classes/types PascalCase
@@ -115,13 +116,18 @@ external_assets: false
   external consumers
 - Rate limiting store: none — single instance/user; limits are enforced
   by upstream providers, not this Worker
-- Authentication: HTTP Basic Auth, toggled by `AUTH_ENABLED`. Credential
-  comparison is plaintext `===` — a deliberate choice for this project,
-  not the constant-time comparison some setups default to. Lockout: max
-  3 failed attempts per IP (`CF-Connecting-IP`), tracked in `AUTH_KV`
-  with `expirationTtl` 900s (15 min); fails open (no lockout) if
-  `AUTH_KV` is not bound. A request with no `Authorization` header is not
-  counted as a failed attempt; a successful login clears the counter.
+- Authentication: HTTP Bearer token, toggled by `AUTH_ENABLED`. The client
+  sends `Authorization: Bearer <BASIC_AUTH_TOKEN>`; the Worker compares it
+  against the `BASIC_AUTH_TOKEN` env var with constant-time comparison
+  (`crypto.subtle.timingSafeEqual`). Lockout: max 3 failed attempts per IP
+  (`CF-Connecting-IP`), tracked in `AUTH_KV` with `expirationTtl` 900s
+  (15 min); fails open (no lockout) if `AUTH_KV` is not bound. A request
+  with no `Authorization` header is not counted as a failed attempt; a
+  successful auth clears the counter. The browser stores its copy of the
+  token in `localStorage` under `meeting-assistant.auth-token` (read by
+  `public/providers.js`, helper `setStoredAuthToken`) — a deliberate
+  single-user, personal-device choice: the token belongs to the same
+  person who owns the browser profile.
 - Webhook inbound verification: none — no inbound webhooks
 - Request / response schemas:
   - `POST /api/chat` — request: `{ messages, provider?, model?,
@@ -136,10 +142,10 @@ external_assets: false
   through unmodified — no `request_id` field or custom error envelope;
   this project explicitly decided against a standardized wrapper.
   Local exception (fail-fast config check): when `AUTH_ENABLED=true` but
-  `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` is unset, the Worker returns a
-  plain-text 500 naming the missing var(s) — values never included, no
-  `WWW-Authenticate` header — before auth, routing, or static serving.
-  This is a deployment-misconfiguration diagnostic, not an error envelope
+  `BASIC_AUTH_TOKEN` is unset, the Worker returns a plain-text 500 naming
+  the missing var — value never included, no `WWW-Authenticate` header —
+  before auth, routing, or static serving. This is a
+  deployment-misconfiguration diagnostic, not an error envelope
 - Pagination: none
 
 ## 6. UI / UX Constraints
@@ -182,10 +188,10 @@ external_assets: false
   releases — not strictly enforced
 
 ## 8. Environment & Configuration
-- Required env vars: `AUTH_ENABLED`, `BASIC_AUTH_USER`, `BASIC_AUTH_PASS`,
+- Required env vars: `AUTH_ENABLED`, `BASIC_AUTH_TOKEN`,
   `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`,
   `SAMBANOVA_API_KEY`, `PUBLIC_URL`
-- Required bindings (non-secret): KV namespace `AUTH_KV` (Basic Auth
+- Required bindings (non-secret): KV namespace `AUTH_KV` (auth
   lockout counter) — create via `wrangler kv namespace create AUTH_KV`;
   optional but recommended whenever `AUTH_ENABLED=true`
 - Feature flags: none
@@ -224,10 +230,10 @@ external_assets: false
   so a user can never be locked out permanently
 - No uploaded context field over 5,000 characters without client-side
   validation
-- Secret-comparison policy: plaintext `===` string comparison for Basic
-  Auth credentials is this project's deliberate choice, not an oversight
-  — constant-time comparison was explicitly considered and declined for
-  this threat model
+- Secret-comparison policy: the `BASIC_AUTH_TOKEN` secret is compared with
+  constant-time `crypto.subtle.timingSafeEqual` (Task #010A replaced the
+  earlier plaintext `===` Basic Auth comparison when auth moved to a single
+  Bearer secret) — comparison timing must never vary with token content
 - API stability policy: no external consumers currently, so no versioning
   or backward-compatibility guarantee is required; add one before
   exposing this API outside this project

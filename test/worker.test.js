@@ -1,15 +1,19 @@
 import { env, SELF } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import worker, { authConfigError } from '../worker.js';
+import worker, { authConfigError, tokensMatch } from '../worker.js';
 
-describe('worker auth', () => {
+// Nilai dummy (bukan rahasia) yang HARUS cocok dengan binding
+// BASIC_AUTH_TOKEN di vitest.worker.config.js — dipakai jalur lewat SELF.fetch.
+const TOKEN = 'test-bearer-token-1234';
+
+describe('worker auth (Task #010A)', () => {
   it('returns 401 when AUTH_ENABLED=true and no credentials are sent', async () => {
     const response = await SELF.fetch('https://example.com/api/chat', {
       method: 'POST',
       body: JSON.stringify({ messages: [] }),
     });
     expect(response.status).toBe(401);
-    expect(response.headers.get('WWW-Authenticate')).toContain('Basic');
+    expect(response.headers.get('WWW-Authenticate')).toContain('Bearer');
   });
 
   it('does not count a missing Authorization header as a failed lockout attempt', async () => {
@@ -19,18 +23,29 @@ describe('worker auth', () => {
     const second = await SELF.fetch('https://example.com/api/chat', { method: 'POST' });
     expect(second.status).toBe(401);
   });
+
+  it('accepts the configured Bearer token and reaches the route handler', async () => {
+    const response = await SELF.fetch('https://example.com/api/chat', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ messages: [] }),
+    });
+    // Auth lolos (bukan 401) → handler chat jalan → tak ada API key di
+    // binding test (string kosong) → 500 by design.
+    expect(response.status).toBe(500);
+    expect(await response.text()).toContain('Tidak ada provider');
+    expect(response.headers.get('WWW-Authenticate')).toBeNull();
+  });
 });
 
-describe('fail-fast konfigurasi auth (Task #003)', () => {
-  const USER = 'test-user';
-  const PASS = 's3cr3t-pass';
+describe('fail-fast konfigurasi auth (Task #003, Task #010A)', () => {
+  const TOKEN = 'token-lokal-sintetis';
 
   // Env sintetis dibangun ulang di dalam tiap test — tidak ada state yang
   // dipakai bersama antar test, jadi test ini mandiri (isolated).
   const makeEnv = (overrides = {}) => ({
     AUTH_ENABLED: 'true',
-    BASIC_AUTH_USER: USER,
-    BASIC_AUTH_PASS: PASS,
+    BASIC_AUTH_TOKEN: TOKEN,
     ASSETS: { fetch: async () => new Response('asset-ok') },
     ...overrides,
   });
@@ -38,40 +53,19 @@ describe('fail-fast konfigurasi auth (Task #003)', () => {
   const chatRequest = () =>
     new Request('https://example.com/api/chat', { method: 'POST' });
 
-  it('returns 500 naming only the var that is unset (BASIC_AUTH_USER)', async () => {
-    const res = await worker.fetch(chatRequest(), makeEnv({ BASIC_AUTH_USER: undefined }));
+  it('returns 500 naming BASIC_AUTH_TOKEN when it is unset', async () => {
+    const res = await worker.fetch(chatRequest(), makeEnv({ BASIC_AUTH_TOKEN: undefined }));
     expect(res.status).toBe(500);
     const text = await res.text();
-    expect(text).toContain('BASIC_AUTH_USER');
-    expect(text).not.toContain('BASIC_AUTH_PASS');
-    expect(text).not.toContain(PASS); // nilai kredensial tidak pernah bocor
+    expect(text).toContain('BASIC_AUTH_TOKEN');
+    expect(text).not.toContain(TOKEN); // nilai token tidak pernah bocor
     expect(res.headers.get('WWW-Authenticate')).toBeNull(); // ini bukan challenge auth
-  });
-
-  it('returns 500 naming only the var that is unset (BASIC_AUTH_PASS)', async () => {
-    const res = await worker.fetch(chatRequest(), makeEnv({ BASIC_AUTH_PASS: undefined }));
-    expect(res.status).toBe(500);
-    const text = await res.text();
-    expect(text).toContain('BASIC_AUTH_PASS');
-    expect(text).not.toContain('BASIC_AUTH_USER');
-    expect(text).not.toContain(PASS);
-  });
-
-  it('returns 500 naming both vars when both credentials are unset', async () => {
-    const res = await worker.fetch(
-      chatRequest(),
-      makeEnv({ BASIC_AUTH_USER: undefined, BASIC_AUTH_PASS: undefined }),
-    );
-    expect(res.status).toBe(500);
-    const text = await res.text();
-    expect(text).toContain('BASIC_AUTH_USER');
-    expect(text).toContain('BASIC_AUTH_PASS');
   });
 
   it('fails closed for static assets too when the auth config is broken', async () => {
     const res = await worker.fetch(
       new Request('https://example.com/', { method: 'GET' }),
-      makeEnv({ BASIC_AUTH_USER: undefined, BASIC_AUTH_PASS: undefined }),
+      makeEnv({ BASIC_AUTH_TOKEN: undefined }),
     );
     expect(res.status).toBe(500);
     expect(await res.text()).not.toBe('asset-ok');
@@ -80,16 +74,16 @@ describe('fail-fast konfigurasi auth (Task #003)', () => {
   it('stays out of the way when AUTH_ENABLED is not "true"', async () => {
     const res = await worker.fetch(
       new Request('https://example.com/', { method: 'GET' }),
-      makeEnv({ AUTH_ENABLED: 'false', BASIC_AUTH_USER: undefined, BASIC_AUTH_PASS: undefined }),
+      makeEnv({ AUTH_ENABLED: 'false', BASIC_AUTH_TOKEN: undefined }),
     );
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('asset-ok');
   });
 
-  it('accepts correct credentials and rejects wrong ones when config is complete', async () => {
+  it('accepts a correct Bearer token and rejects a wrong one when config is complete', async () => {
     const good = await worker.fetch(
       new Request('https://example.com/', {
-        headers: { Authorization: `Basic ${btoa(`${USER}:${PASS}`)}` },
+        headers: { Authorization: `Bearer ${TOKEN}` },
       }),
       makeEnv(),
     );
@@ -97,11 +91,20 @@ describe('fail-fast konfigurasi auth (Task #003)', () => {
 
     const bad = await worker.fetch(
       new Request('https://example.com/', {
-        headers: { Authorization: `Basic ${btoa(`${USER}:salah`)}` },
+        headers: { Authorization: 'Bearer token-salah' },
       }),
       makeEnv(),
     );
     expect(bad.status).toBe(401);
+
+    // Skema lama (Basic) tidak lagi diterima — auth hanya Bearer.
+    const legacy = await worker.fetch(
+      new Request('https://example.com/', {
+        headers: { Authorization: `Basic ${btoa(`${TOKEN}:${TOKEN}`)}` },
+      }),
+      makeEnv(),
+    );
+    expect(legacy.status).toBe(401);
   });
 
   it('authConfigError returns null unless AUTH_ENABLED is "true" with missing vars', () => {
@@ -109,6 +112,19 @@ describe('fail-fast konfigurasi auth (Task #003)', () => {
     expect(authConfigError({ AUTH_ENABLED: 'false' })).toBeNull();
     expect(authConfigError({ AUTH_ENABLED: 'true' })).not.toBeNull();
     expect(authConfigError({})).toBeNull();
+  });
+});
+
+describe('token comparison (Task #010A)', () => {
+  // Fungsi murni tanpa state — tiap kasus input sendiri (isolated by design).
+
+  it('matches identical tokens (incl. non-ASCII) and rejects near-misses', () => {
+    expect(tokensMatch('abc123', 'abc123')).toBe(true);
+    expect(tokensMatch('kunci-rahasia', 'kunci-rahaslx')).toBe(false); // sama panjang
+    expect(tokensMatch('kunci', 'kunci-panjang')).toBe(false); // beda panjang, tidak melempar
+    expect(tokensMatch('', 'x')).toBe(false);
+    expect(tokensMatch('token', '')).toBe(false); // expected kosong = gagal tertutup
+    expect(tokensMatch('køij-token', 'køij-token')).toBe(true);
   });
 });
 
@@ -243,21 +259,20 @@ describe('chat provider fallback chain (Task #005)', () => {
   });
 });
 
-describe('transcribe proxy & auth lockout (Task #006)', () => {
+describe('transcribe proxy & auth lockout (Task #006, #010A)', () => {
   // Kedua test lockout sengaja memakai IP yang sama: test kedua memulai
   // dengan assert key KV sudah null — sekaligus membuktikan state test
   // sebelumnya benar-benar ditebas di afterEach (isolated, lihat kriteria).
   const IP = '203.0.113.9';
   const LOCK_KEY = `authfail:${IP}`;
-  const USER = 'test-user';
-  const PASS = 's3cr3t-pass';
+  const TOKEN = 'token-lokal-sintetis';
 
   let originalFetch;
   let outboundCalls;
 
-  const authHeaders = (pass, ip = IP) => ({
+  const authHeaders = (token, ip = IP) => ({
     'CF-Connecting-IP': ip,
-    Authorization: `Basic ${btoa(`${USER}:${pass}`)}`,
+    Authorization: `Bearer ${token}`,
   });
 
   const post = (path, headers) =>
@@ -267,8 +282,7 @@ describe('transcribe proxy & auth lockout (Task #006)', () => {
   // supaya mekanisme lockout diuji apa adanya, bukan terhadap tiruan.
   const makeEnv = (overrides = {}) => ({
     AUTH_ENABLED: 'true',
-    BASIC_AUTH_USER: USER,
-    BASIC_AUTH_PASS: PASS,
+    BASIC_AUTH_TOKEN: TOKEN,
     AUTH_KV: env.AUTH_KV,
     ASSETS: { fetch: async () => new Response('asset-ok') },
     ...overrides,
@@ -299,14 +313,14 @@ describe('transcribe proxy & auth lockout (Task #006)', () => {
   it('locks the IP after 3 failed attempts: the 4th request gets 429 even with correct credentials', async () => {
     expect(await env.AUTH_KV.get(LOCK_KEY)).toBeNull(); // mulai dari bersih
 
-    const wrong = authHeaders('wrong-pass');
+    const wrong = authHeaders('token-salah');
     for (let i = 0; i < 3; i++) {
       const res = await worker.fetch(post('/api/chat', wrong), makeEnv());
       expect(res.status).toBe(401);
     }
     expect(await env.AUTH_KV.get(LOCK_KEY)).toBe('3');
 
-    const locked = await worker.fetch(post('/api/chat', authHeaders(PASS)), makeEnv());
+    const locked = await worker.fetch(post('/api/chat', authHeaders(TOKEN)), makeEnv());
     expect(locked.status).toBe(429);
     expect(locked.headers.get('Retry-After')).toBe('900');
     expect(await locked.text()).toContain('15 menit');
@@ -318,13 +332,13 @@ describe('transcribe proxy & auth lockout (Task #006)', () => {
     // me-tebas state, assert pertama ini gagal.
     expect(await env.AUTH_KV.get(LOCK_KEY)).toBeNull();
 
-    const wrong = authHeaders('wrong-pass');
+    const wrong = authHeaders('token-salah');
     expect((await worker.fetch(post('/api/chat', wrong), makeEnv())).status).toBe(401);
     expect((await worker.fetch(post('/api/chat', wrong), makeEnv())).status).toBe(401);
     expect(await env.AUTH_KV.get(LOCK_KEY)).toBe('2');
 
     const success = await worker.fetch(
-      new Request('https://example.com/', { method: 'GET', headers: authHeaders(PASS) }),
+      new Request('https://example.com/', { method: 'GET', headers: authHeaders(TOKEN) }),
       makeEnv(),
     );
     expect(success.status).toBe(200);
