@@ -28,13 +28,9 @@ cp .dev.vars.example .dev.vars   # lalu isi nilai asli
 Minimal isi `GROQ_API_KEY` + **salah satu** key chat. Tanpa key, endpoint
 sengaja membalas 500 yang menyebut nama var yang hilang (fail-fast, bukan bug).
 
-**Frontend & token:** auth hanya menjaga route `/api/*` — shell frontend
-selalu bisa dimuat (browser tidak pernah mengirim header Authorization
-saat memuat halaman). Masukkan token lewat panel **Akses API** di UI
-(input disimpan ke localStorage key `meeting-assistant.auth-token`, atau
-via `setStoredAuthToken(token)` dari `public/providers.js`); semua request
-`/api/*` otomatis membawa `Authorization: Bearer <token>` dengan nilai
-yang sama persis seperti `BASIC_AUTH_TOKEN`.
+**Frontend & token:** lihat bagian **[Login & autentikasi](#login--autentikasi)**
+di bawah — auth hanya menjaga route `/api/*`, dan token dimasukkan lewat
+panel **Akses API** di UI.
 
 **Produksi:**
 
@@ -82,6 +78,79 @@ groq → mistral → sambanova).
 Binding `AUTH_KV` (namespace KV) diperlukan untuk proteksi brute-force
 lockout; tanpanya auth tetap jalan tanpa lockout. Buat dengan
 `wrangler kv namespace create AUTH_KV` lalu tempel id-nya di `wrangler.toml`.
+
+## Login & autentikasi
+
+**Tidak ada username dan tidak ada password.** Satu-satunya kredensial
+adalah satu token rahasia (`BASIC_AUTH_TOKEN`) yang dikirim sebagai header
+`Authorization: Bearer <token>`. Tidak ada form login, tidak ada akun, dan
+browser tidak menampilkan prompt apa pun — prompt native hanya ada di
+skema lama Basic Auth, yang sudah tidak dipakai.
+
+### Langkah
+
+**1. Lokal — auth mati (default, tanpa login apa pun).**
+`.dev.vars` bawaan berisi `AUTH_ENABLED=false`: halaman dan API langsung
+terbuka. Ini yang disarankan untuk `wrangler dev` sehari-hari.
+
+**2. Nyalakan auth — buat token dan simpan di server.**
+
+```bash
+openssl rand -hex 32      # hasilnya 64 karakter acak
+```
+
+| Lingkungan | Cara menyimpan |
+|---|---|
+| Lokal | tulis `BASIC_AUTH_TOKEN=<hasil>` di `.dev.vars`, lalu set `AUTH_ENABLED=true` |
+| Produksi | `wrangler secret put BASIC_AUTH_TOKEN` (isi dengan hasil command di atas), pastikan `AUTH_ENABLED = "true"` di `wrangler.toml [vars]` |
+
+**3. Masukkan token ke browser.** Buka halaman → panel **Akses API** →
+tempel token → **Simpan**. Token disimpan di localStorage browser (key
+`meeting-assistant.auth-token`) dan otomatis ditempelkan ke setiap request
+`/api/*`. Nilainya harus **sama persis** dengan `BASIC_AUTH_TOKEN` di server.
+
+**4. Selesai.** Tidak ada login ulang. Token bertahan sampai kamu menghapusnya
+lewat tombol **Hapus** (atau menghapus key-nya dari DevTools), atau sampai
+nilainya diganti di server — token lama otomatis tidak berlaku lagi.
+
+### Apa yang dijaga
+
+| Path | Saat `AUTH_ENABLED=true` |
+|---|---|
+| `/api/chat`, `/api/transcribe` | **Butuh token** — tanpa token / salah token → `401` |
+| Shell frontend (file di `public/`, mis. `app.js`) | Terbuka tanpa token |
+
+Alasannya: browser **tidak pernah** mengirim header `Authorization` saat
+memuat halaman (Bearer tidak punya prompt login seperti Basic), jadi
+mengunci frontend hanya menghasilkan `401` tanpa jalan masuk. Tidak ada
+rahasia di frontend — key provider tidak pernah sampai ke browser.
+
+### Kalau ada masalah
+
+| Gejala | Arti | Solusi |
+|---|---|---|
+| `401 Unauthorized` di `/api/*` | token belum disimpan di panel, atau nilainya beda dengan server | Simpan token yang benar di panel **Akses API** |
+| `500 Konfigurasi auth tidak lengkap: BASIC_AUTH_TOKEN` | `AUTH_ENABLED=true` tapi token belum di-set di server (fail-fast, bukan bug) | isi `BASIC_AUTH_TOKEN` di `.dev.vars` / `wrangler secret put` |
+| `429 Terlalu banyak percobaan gagal` | 3 kali token salah berturut-turut dari IP yang sama | tunggu 15 menit (reset otomatis), atau kirim token yang benar |
+| Lupa token nilainya | — | lokal: lihat `.dev.vars`; produksi: buat baru dengan `wrangler secret put BASIC_AUTH_TOKEN` (menimpa yang lama), lalu Simpan nilai baru di panel |
+| Halaman tidak termuat (404) | `public/index.html` belum dibuat — itu celah lama di luar auth (lihat `changelog.md`, Task #016) | ikuti Task #016 di tracker |
+
+### Uji manual (curl)
+
+```bash
+curl -X POST https://<host>/api/chat \
+  -H "Authorization: Bearer <BASIC_AUTH_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"halo"}]}'
+```
+
+Tanpa header itu → `401`. Token salah → `401`, dan tiga kali salah → `429`.
+
+### Periksa dari browser
+
+DevTools → **Application** → **Local Storage** → origin kamu →
+`meeting-assistant.auth-token`. Menghapus key-nya = "logout" (request API
+kembali `401` sampai token disimpan lagi).
 
 ## Menjalankan
 
