@@ -1,6 +1,6 @@
 ---
 project: meeting-assistant
-version: 1.0.8
+version: 1.0.9
 source: prd
 last_updated: 2026-09-28
 project_shape: fullstack
@@ -62,6 +62,7 @@ external_assets: false
   │   └── styles.css
   └── test/
       ├── worker.test.js          # Project "worker" (vitest-pool-workers/workerd)
+      ├── integration.test.js     # Project "worker" — E2E fetch handler (auth → chat → mocked provider)
       └── frontend/                # Project "frontend" (jsdom)
           └── *.test.js
   ```

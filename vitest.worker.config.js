@@ -33,6 +33,7 @@ export default defineConfig({
   ],
   test: {
     name: 'worker',
-    include: ['test/worker.test.js'],
+    // integration.test.js = E2E fetch handler (auth -> chat -> mocked provider)
+    include: ['test/worker.test.js', 'test/integration.test.js'],
   },
 });
