@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AudioCaptureError,
   assertHasAudioTrack,
+  mixAudioStreams,
   startChunkedRecording,
   startDisplayCapture,
   startMicCapture,
@@ -31,6 +32,7 @@ const makeStream = ({ audio = 1, video = 0 } = {}) => {
   return {
     getTracks: () => tracks,
     getAudioTracks: () => tracks.filter((track) => track.kind === 'audio'),
+    getVideoTracks: () => tracks.filter((track) => track.kind === 'video'),
   };
 };
 
@@ -178,5 +180,92 @@ describe('audio-capture module (Task #007)', () => {
     expect(error.name).toBe('AudioCaptureError');
     expect(error.code).toBe('SOME_CODE');
     expect(error.message).toBe('boom');
+  });
+});
+
+describe('mixAudioStreams (tab audio + mic)', () => {
+  class FakeAudioContext {
+    constructor() {
+      this.state = 'running';
+      this.sources = [];
+      this.closed = false;
+      FakeAudioContext.instances.push(this);
+    }
+
+    createMediaStreamSource(stream) {
+      const source = { stream, connect: vi.fn(), disconnect: vi.fn() };
+      this.sources.push(source);
+      return source;
+    }
+
+    createMediaStreamDestination() {
+      this.destTrack = new MockTrack('audio');
+      const destTrack = this.destTrack;
+      this.destination = {
+        stream: { getAudioTracks: () => [destTrack], getTracks: () => [destTrack] },
+      };
+      return this.destination;
+    }
+
+    resume() {
+      this.state = 'running';
+      return Promise.resolve();
+    }
+
+    close() {
+      this.state = 'closed';
+      this.closed = true;
+      return Promise.resolve();
+    }
+  }
+  FakeAudioContext.instances = [];
+
+  class FakeMediaStream {
+    constructor(tracks = []) {
+      this.tracks = tracks;
+    }
+    getTracks() {
+      return this.tracks;
+    }
+    getAudioTracks() {
+      return this.tracks.filter((track) => track.kind === 'audio');
+    }
+    getVideoTracks() {
+      return this.tracks.filter((track) => track.kind === 'video');
+    }
+  }
+
+  const inject = () => ({ AudioContext: FakeAudioContext, MediaStream: FakeMediaStream });
+
+  it('connects both audio sources to one destination and returns a mixed stream with the display video', () => {
+    const display = makeStream({ audio: 1, video: 1 });
+    const mic = makeStream({ audio: 1, video: 0 });
+
+    const { stream, close } = mixAudioStreams(display, mic, inject());
+
+    const ctx = FakeAudioContext.instances[0];
+    expect(ctx.sources.map((source) => source.stream)).toEqual([display, mic]); // keduanya terhubung
+    expect(ctx.sources).toHaveLength(2);
+    for (const source of ctx.sources) expect(source.connect).toHaveBeenCalledTimes(1);
+    expect(ctx.sources[0].connect.mock.calls[0][0]).toBe(ctx.destination);
+
+    expect(stream).toBeInstanceOf(FakeMediaStream);
+    expect(stream.getAudioTracks()).toEqual([ctx.destTrack]); // satu track audio campuran
+    expect(stream.getVideoTracks()).toEqual(display.getVideoTracks()); // video display ikut
+
+    close();
+    for (const source of ctx.sources) expect(source.disconnect).toHaveBeenCalledTimes(1);
+    expect(ctx.closed).toBe(true); // AudioContext dilepas
+  });
+
+  it('throws a catchable AUDIO_CONTEXT_UNAVAILABLE when Web Audio is unavailable (jsdom: no globals)', () => {
+    let caught = null;
+    try {
+      mixAudioStreams(makeStream(), makeStream());
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AudioCaptureError);
+    expect(caught).toMatchObject({ code: 'AUDIO_CONTEXT_UNAVAILABLE' });
   });
 });

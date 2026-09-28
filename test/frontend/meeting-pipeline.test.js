@@ -36,6 +36,7 @@ const makeStream = ({ audio = 1, video = 1 } = {}) => {
   return {
     getTracks: () => tracks,
     getAudioTracks: () => tracks.filter((track) => track.kind === 'audio'),
+    getVideoTracks: () => tracks.filter((track) => track.kind === 'video'),
   };
 };
 
@@ -347,5 +348,141 @@ describe('meeting pipeline panel wiring (capture + network mocked)', () => {
     expect(appRoot.querySelector('[data-testid="meeting-panel"]')).toBeNull();
     expect(appRoot.children).toHaveLength(0);
     appRoot.remove();
+  });
+});
+
+describe('meeting panel microphone mixing (tab audio + mic)', () => {
+  // jsdom tidak punya Web Audio/MediaStream — dua global ini di-stub per test
+  // dan dikembalikan di afterEach (isolasi @knowledge §4).
+  const originalAudioContext = Object.getOwnPropertyDescriptor(globalThis, 'AudioContext');
+  const originalMediaStream = Object.getOwnPropertyDescriptor(globalThis, 'MediaStream');
+
+  class FakeAudioContext {
+    constructor() {
+      this.state = 'running';
+      this.sources = [];
+      this.closed = false;
+      FakeAudioContext.instances.push(this);
+    }
+
+    createMediaStreamSource(stream) {
+      const source = { stream, connect: vi.fn(), disconnect: vi.fn() };
+      this.sources.push(source);
+      return source;
+    }
+
+    createMediaStreamDestination() {
+      this.destTrack = new MockTrack('audio');
+      const destTrack = this.destTrack;
+      this.destination = {
+        stream: { getAudioTracks: () => [destTrack], getTracks: () => [destTrack] },
+      };
+      return this.destination;
+    }
+
+    resume() {
+      this.state = 'running';
+      return Promise.resolve();
+    }
+
+    close() {
+      this.state = 'closed';
+      this.closed = true;
+      return Promise.resolve();
+    }
+  }
+  FakeAudioContext.instances = [];
+
+  class FakeMediaStream {
+    constructor(tracks = []) {
+      this.tracks = tracks;
+    }
+    getTracks() {
+      return this.tracks;
+    }
+    getAudioTracks() {
+      return this.tracks.filter((track) => track.kind === 'audio');
+    }
+    getVideoTracks() {
+      return this.tracks.filter((track) => track.kind === 'video');
+    }
+  }
+
+  let lastRecorder;
+  class InspectRecorder extends MockRecorder {
+    constructor(...args) {
+      super(...args);
+      lastRecorder = this;
+    }
+  }
+
+  beforeEach(() => {
+    FakeAudioContext.instances = [];
+    lastRecorder = null;
+    Object.defineProperty(globalThis, 'AudioContext', { value: FakeAudioContext, configurable: true, writable: true });
+    Object.defineProperty(globalThis, 'MediaStream', { value: FakeMediaStream, configurable: true, writable: true });
+    Object.defineProperty(globalThis, 'MediaRecorder', { value: InspectRecorder, configurable: true, writable: true });
+  });
+
+  afterEach(() => {
+    if (originalAudioContext) Object.defineProperty(globalThis, 'AudioContext', originalAudioContext);
+    else delete globalThis.AudioContext;
+    if (originalMediaStream) Object.defineProperty(globalThis, 'MediaStream', originalMediaStream);
+    else delete globalThis.MediaStream;
+    // MediaRecorder/globalThis dikembalikan oleh afterEach file-level
+  });
+
+  it('records a mixed stream carrying both display audio and the microphone, then releases everything', async () => {
+    const displayStream = makeStream({ audio: 1, video: 1 });
+    const micStream = makeStream({ audio: 1, video: 0 });
+    navigator.mediaDevices.getDisplayMedia = vi.fn(async () => displayStream);
+    navigator.mediaDevices.getUserMedia = vi.fn(async () => micStream);
+    const fetchFn = pipelineFetch();
+    mountMeetingPanel(root, { fetchFn });
+
+    byTestid('meeting-start').click();
+    await waitFor(() => expect(byTestid('meeting-status').textContent).toContain('audio tab + mikrofon'));
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+    const ctx = FakeAudioContext.instances[0];
+    expect(ctx.sources.map((source) => source.stream)).toEqual([displayStream, micStream]); // tab + mic
+    for (const source of ctx.sources) expect(source.connect).toHaveBeenCalledTimes(1);
+
+    // Yang direkam adalah stream campuran, bukan display mentah
+    expect(lastRecorder.stream).toBeInstanceOf(FakeMediaStream);
+    expect(lastRecorder.stream.getAudioTracks()).toEqual([ctx.destTrack]);
+    expect(lastRecorder.stream.getVideoTracks()).toEqual(displayStream.getVideoTracks());
+
+    byTestid('meeting-stop').click();
+    await waitFor(() => expect(byTestid('meeting-output').textContent).toBe('draft jawaban'));
+
+    expect(displayStream.getTracks().every((track) => track.stop.mock.calls.length > 0)).toBe(true);
+    expect(micStream.getTracks().every((track) => track.stop.mock.calls.length > 0)).toBe(true);
+    expect(ctx.closed).toBe(true); // AudioContext dilepas setelah diproses
+    expect(byTestid('meeting-transcript').textContent).toBe('transkrip lawan bicara');
+    expect(byTestid('meeting-status').textContent).toContain('groq');
+    expect(byTestid('meeting-error').hidden).toBe(true);
+  });
+
+  it('falls back to display-only capture when the microphone is denied', async () => {
+    const displayStream = makeStream({ audio: 1, video: 1 });
+    navigator.mediaDevices.getDisplayMedia = vi.fn(async () => displayStream);
+    navigator.mediaDevices.getUserMedia = vi.fn(async () => {
+      throw new DOMException('Permission denied', 'NotAllowedError');
+    });
+    const fetchFn = pipelineFetch();
+    mountMeetingPanel(root, { fetchFn });
+
+    byTestid('meeting-start').click();
+    await waitFor(() => expect(byTestid('meeting-status').textContent).toContain('Merekam'));
+
+    expect(byTestid('meeting-status').textContent).toContain('mikrofon tidak aktif');
+    expect(FakeAudioContext.instances).toHaveLength(0); // mixing tidak pernah dicoba
+    expect(lastRecorder.stream).toBe(displayStream); // merekam display apa adanya
+
+    byTestid('meeting-stop').click();
+    await waitFor(() => expect(byTestid('meeting-output').textContent).toBe('draft jawaban'));
+    expect(displayStream.getTracks().every((track) => track.stop.mock.calls.length > 0)).toBe(true);
+    expect(byTestid('meeting-error').hidden).toBe(true);
   });
 });

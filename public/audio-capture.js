@@ -51,6 +51,49 @@ export async function startMicCapture(options = {}) {
   }
 }
 
+/**
+ * Mix a display/tab capture and a microphone capture into one recordable
+ * MediaStream via the Web Audio API: a single destination audio track
+ * carrying both voices, plus the display's video tracks. Returns
+ * { stream, close() } — close() disconnects the sources and releases the
+ * AudioContext. Throws a catchable AudioCaptureError (code
+ * AUDIO_CONTEXT_UNAVAILABLE) when Web Audio is unavailable so callers can
+ * fall back to unmixed display-only capture.
+ */
+export function mixAudioStreams(displayStream, micStream, { AudioContext: AudioContextCtor, MediaStream: MediaStreamCtor } = {}) {
+  const Ctx = AudioContextCtor ?? globalThis.AudioContext ?? globalThis.webkitAudioContext;
+  const Stream = MediaStreamCtor ?? globalThis.MediaStream;
+  if (typeof Ctx !== 'function' || typeof Stream !== 'function') {
+    throw new AudioCaptureError(
+      'Web Audio API is unavailable — microphone cannot be mixed with display audio',
+      'AUDIO_CONTEXT_UNAVAILABLE',
+    );
+  }
+  const context = new Ctx();
+  const destination = context.createMediaStreamDestination();
+  const sources = [];
+  for (const candidate of [displayStream, micStream]) {
+    if ((candidate?.getAudioTracks?.() ?? []).length === 0) continue;
+    const source = context.createMediaStreamSource(candidate);
+    source.connect(destination);
+    sources.push(source);
+  }
+  if (context.state === 'suspended') {
+    void Promise.resolve(context.resume?.()).catch(() => {});
+  }
+  const stream = new Stream([
+    ...destination.stream.getAudioTracks(),
+    ...(displayStream?.getVideoTracks?.() ?? []),
+  ]);
+  return {
+    stream,
+    close() {
+      for (const source of sources) source.disconnect?.();
+      if (context.state !== 'closed') void Promise.resolve(context.close?.()).catch(() => {});
+    },
+  };
+}
+
 /** Share a display/tab and return its MediaStream; throws if the share includes no audio track. */
 export async function startDisplayCapture(options = {}) {
   const stream = await getMediaDevices().getDisplayMedia({ video: true, audio: options.audio ?? true });

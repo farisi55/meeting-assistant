@@ -11,6 +11,8 @@
 import {
   startChunkedRecording,
   startDisplayCapture,
+  startMicCapture,
+  mixAudioStreams,
   stopStream,
   watchTrackEnded,
 } from './audio-capture.js';
@@ -689,7 +691,8 @@ export function mountMeetingPanel(root, { fetchFn, storage = globalThis.localSto
 
   const hint = document.createElement('p');
   hint.textContent =
-    'Bagikan audio tab/sistem (centang "Bagikan audio"), jalankan meeting, lalu berhenti — transkrip dan draft respons tampil di bawah.';
+    'Bagikan audio tab/sistem (centang "Bagikan audio") — mikrofon Anda ikut direkam, jadi suara kedua pihak masuk transkrip. ' +
+    'Jalankan meeting, lalu berhenti — transkrip dan draft respons tampil di bawah.';
   panel.append(hint);
 
   const startButton = document.createElement('button');
@@ -734,14 +737,21 @@ export function mountMeetingPanel(root, { fetchFn, storage = globalThis.localSto
     status.textContent = '';
   };
 
+  /** Stop listening and release every stream/context owned by a recording round. */
+  const releaseCapture = (round) => {
+    round.unsubscribe?.();
+    stopStream(round.stream);
+    if (round.micStream) stopStream(round.micStream);
+    round.mix?.close?.();
+  };
+
   /** Stop capture and run one round: chunk → /api/transcribe → render → context-aware /api/chat → render. */
   const finishRound = async (note) => {
     if (!recording || busy) return;
     const round = recording;
     recording = null;
     busy = true;
-    round.unsubscribe?.();
-    stopStream(round.stream);
+    releaseCapture(round);
     error.hidden = true;
     status.textContent = 'Men-transkrip audio...';
     render();
@@ -776,17 +786,33 @@ export function mountMeetingPanel(root, { fetchFn, storage = globalThis.localSto
     status.textContent = 'Membagikan audio meeting...';
     render();
     let stream = null;
+    let micStream = null;
+    let mix = null;
     try {
       stream = await startDisplayCapture();
-      const { stop } = startChunkedRecording(stream);
+      status.textContent = 'Membagikan mikrofon...';
+      try {
+        micStream = await startMicCapture();
+        mix = mixAudioStreams(stream, micStream);
+      } catch {
+        // Mic ditolak/tak tersedia atau Web Audio absen → lanjut dengan audio tab saja
+        if (micStream) stopStream(micStream);
+        micStream = null;
+        mix = null;
+      }
+      const { stop } = startChunkedRecording(mix ? mix.stream : stream);
       // share dihentikan lewat UI browser → proses audio yang sudah terekam
       const unsubscribe = watchTrackEnded(stream, () => {
         void finishRound('Sesi share berakhir');
       });
-      recording = { stream, unsubscribe, stop };
-      status.textContent = 'Merekam — klik "Berhenti & proses" setelah percakapan selesai';
+      recording = { stream, micStream, mix, unsubscribe, stop };
+      status.textContent = micStream
+        ? 'Merekam (audio tab + mikrofon) — klik "Berhenti & proses" setelah percakapan selesai'
+        : 'Merekam (mikrofon tidak aktif) — klik "Berhenti & proses" setelah percakapan selesai';
     } catch (err) {
       if (stream && !recording) stopStream(stream); // jangan biarkan stream bocor
+      if (micStream) stopStream(micStream);
+      mix?.close?.();
       showError(err, 'Gagal memulai capture audio');
     } finally {
       busy = false;
@@ -804,8 +830,7 @@ export function mountMeetingPanel(root, { fetchFn, storage = globalThis.localSto
   return {
     destroy() {
       if (recording) {
-        recording.unsubscribe?.();
-        stopStream(recording.stream);
+        releaseCapture(recording);
         recording = null;
       }
       root.replaceChildren();
