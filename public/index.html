@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meeting Assistant</title>
+    <!-- icon data-URI kosong: diizinkan img-src 'self' data:, hindari 404 favicon -->
+    <link rel="icon" href="data:," />
+    <!-- Gaya eksternal saja: CSP worker hanya mengizinkan style-src 'self' -->
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <h1>Meeting Assistant</h1>
+      <p class="tagline">
+        Transkrip meeting klien, penyusun respons, dan latihan interview — berjalan privat di
+        akun Cloudflare Anda.
+      </p>
+    </header>
+
+    <main id="app"></main>
+
+    <!-- Bootstrap module eksternal: inline script diblokir CSP script-src 'self' -->
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
