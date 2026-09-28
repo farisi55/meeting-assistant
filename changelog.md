@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.14
-changelog_version: 1.0.20
+changelog_version: 1.0.21
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -628,3 +628,20 @@ simple_mode: true
   - [DOCS] Entri ini sengaja di luar penomoran loop P04 agar [IN PROGRESS]/[NEXT TASKS] tidak terkontaminasi pekerjaan ad-hoc
 - **Notes:** No git remote — `git pull/push origin dev` N/A. Batch di-commit sebagai **3 commit terpisah** (shell → mic-mixing → worker+docs) agar bisa di-revert per kekhawatiran. Pre-existing observations tetap berlaku: ESLint absen (#003); `npm audit` full = 4 high dev-only (`--omit=dev` = 0), fix = breaking downgrade, tidak diterapkan. Catatan sesi: `wrangler dev` port 8787 dipakai untuk seluruh verifikasi live.
 - **Knowledge drift:** UPDATE REQUIRED — **diterapkan dalam batch**: §3 tree (`main.js` + komentar mix), §5 dua exception lokal (unusable success body; Groq model recovery), §9 (SambaNova billing 402; Groq retirement 402/404; mixing mic) — `knowledge_version` 1.0.9 → **1.0.14**. Trigger lain diperiksa: library (§2 — nol paket baru), naming (§4 — tak ada perubahan), API (§5 — tak ada endpoint/schema baru), infra (§8 — tak ada perubahan), test isolation (§4 — pola `beforeEach`/`afterEach` yang sudah ada dipakai ulang). Asset manifest: N/A (`external_assets: false`).
+
+### Ad-hoc Follow-up — Regresi `PROVIDERS.groq.defaultModel` (insiden 429) ✅
+- **Date:** 2026-09-28
+- **Status:** OK
+- **Branch:** dev (langsung, 1 commit)
+- **Symptom:** UI meeting menampilkan `/api/chat merespons 429` saat merangkum transkrip.
+- **Akar masalah:** edit tak ter-commit di working tree mengubah `PROVIDERS.groq.defaultModel` dari `openai/gpt-oss-120b` menjadi `whisper-large-v3-turbo` (model transkripsi — commit HEAD sendiri benar). Dampak berantai terverifikasi dari log + cek per-provider: OpenRouter timeout 15 dtk pada payload meeting → Groq balas **400** (`does not support chat completions`; 400 ≠ 404 jadi model-recovery tidak aktif) → Mistral **429** (kuota free tier) → rantai habis → passthrough 429 dari provider terakhir. Client tidak pernah mengirim `model` — payload cuma `{messages}`.
+- **Fix:**
+  - `worker.js` — **revert 1 baris**: `PROVIDERS.groq.defaultModel` → `openai/gpt-oss-120b`.
+  - `test/worker.test.js` — **+1 regression test**: chat tanpa `model` eksplisit wajib mengirim default chat-capable (`openai/gpt-oss-120b`, bukan whisper/tts); test ini tidak ada sebelumnya sehingga korupsi default lolos suite.
+- **Verifikasi:**
+  - `npm test`: **139 passed, 0 failed, 13 files** (138 → 139).
+  - Mutasi ×1 (kembalikan whisper) → 1 test gagal (yang baru) → revert → hijau.
+  - Live `wrangler dev`: forced `provider: groq` → **200** (0,8 dtk, `_provider: groq`); rantai penuh payload meeting → **200 via Groq** (1,3 dtk).
+- **Regression:** Passed **139, 0 failed**; tidak ada feature flag.
+- **Notes:** Kontribusi pendukung dari kejadian ini: timeout 15 dtk OpenRouter pada payload meeting memang sengaja jatuh ke fallback (keputusan batch sebelumnya — dengan Groq sehat, chain tetap 200). Mistral 429 = kuota upstream, dibiarkan sebagai cadangan terakhir.
+- **Knowledge drift:** TIDAK ADA — tidak ada perubahan perilaku/struktur/kontrak; knowledge v1.0.14 tetap akurat (default Groq sudah terdokumentasi benar; kini dijaga regression test).

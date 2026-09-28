@@ -375,6 +375,22 @@ describe('chat provider fallback chain (Task #005, #014)', () => {
     expect(outboundCalls).toEqual(['api.groq.com']);
   });
 
+  it('sends a chat-capable Groq default model when the client omits model (regression)', async () => {
+    let sentModel = null;
+    globalThis.fetch = async (url, init) => {
+      sentModel = JSON.parse(init.body).model;
+      return respond(200, { choices: [{ message: { content: 'ok' } }] });
+    };
+
+    const res = await worker.fetch(
+      chatRequest({ messages: [] }),
+      envWith({ GROQ_API_KEY: 'gq-key' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(sentModel).toBe('openai/gpt-oss-120b'); // bukan whisper/tts — model chat beneran
+  });
+
   it('recovers from a retired Groq default model via GET /models (hotfix)', async () => {
     const calls = [];
     let chatSeq = 0;
