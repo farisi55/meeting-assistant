@@ -45,7 +45,7 @@ project_shape: fullstack
 |---|---|---|
 | Audio capture (mic + audio sistem) | P0 — MVP | `getUserMedia` + `getDisplayMedia`, tanpa instalasi tambahan |
 | Transkripsi + terjemahan real-time | P0 — MVP | Via Groq Whisper, Indonesia ↔ Inggris |
-| Multi-provider LLM routing + fallback | P0 — MVP | OpenRouter → Groq → Mistral → SambaNova; sudah diimplementasikan |
+| Multi-provider LLM routing + fallback | P0 — MVP | OpenRouter → Groq → Mistral (SambaNova sementara keluar — free tier minta billing); sudah diimplementasikan |
 | Auth toggle | P0 — MVP | Basic Auth aktif hanya saat deployment publik; sudah diimplementasikan |
 | Bantu merangkai respons ("Steer AI") | P1 | User supply poin kasar, AI rapikan jadi kalimat fasih |
 | Upload konteks (CV/JD/product knowledge) | P1 | Personalisasi jawaban per mode |
@@ -227,8 +227,9 @@ project_shape: fullstack
   asisten tetap bisa dipakai sepanjang hari tanpa biaya.
 - **Acceptance criteria:**
   - [x] Worker mencoba provider sesuai `FALLBACK_ORDER` (OpenRouter → Groq →
-        Mistral → SambaNova), lanjut ke provider berikutnya kalau respons
-        non-2xx
+        Mistral; SambaNova sementara di luar rantai karena free tier-nya
+        kini menuntut billing/402), lanjut ke provider berikutnya kalau
+        respons non-2xx
   - [x] Provider tanpa API key ter-set dilewati otomatis tanpa error
   - [x] Client bisa memaksa satu provider spesifik lewat field `provider`
   - [x] Response menyertakan metadata `_provider` supaya UI bisa

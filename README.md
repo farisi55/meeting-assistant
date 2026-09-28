@@ -22,7 +22,7 @@ cp .dev.vars.example .dev.vars   # lalu isi nilai asli
 | `GROQ_API_KEY` | Transkripsi audio (`POST /api/transcribe`, Whisper) |
 | `OPENROUTER_API_KEY` | Chat — provider pertama di rantai fallback |
 | `MISTRAL_API_KEY` | Chat — fallback kedua |
-| `SAMBANOVA_API_KEY` | Chat — fallback ketiga |
+| `SAMBANOVA_API_KEY` | Chat — **keluar dari rantai default** (free tier minta billing/402); masih bisa dipaksa via `provider: 'sambanova'` |
 | `BASIC_AUTH_TOKEN` | Login Bearer (hanya jika `AUTH_ENABLED=true`) — buat dengan `openssl rand -hex 32` |
 
 Minimal isi `GROQ_API_KEY` + **salah satu** key chat. Tanpa key, endpoint
@@ -48,12 +48,21 @@ baseUrl dan model default tiap provider sudah hardcoded di konstanta
 | Provider | baseUrl | defaultModel |
 |---|---|---|
 | openrouter | `https://openrouter.ai/api/v1` | `openrouter/free` |
-| groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` |
+| groq | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` |
 | mistral | `https://api.mistral.ai/v1` | `mistral-small-latest` |
 | sambanova | `https://api.sambanova.ai/v1` | `Meta-Llama-3.3-70B-Instruct` |
 
+**Pemulihan otomatis model Groq:** kalau model default menjawab 404
+(`model_not_found` — mis. dimatikan Groq seperti kasus Agu 2026) dan
+request tidak memaksa `model`, Worker otomatis `GET /openai/v1/models`,
+memilih model chat aktif pengganti, lalu mengulangi Groq pada request
+yang sama. Kalau daftar itu pun gagal, rantai fallback lanjut seperti
+biasa — tidak ada loop.
+
 Urutan percobaan saat provider error/limit: `FALLBACK_ORDER` (openrouter →
-groq → mistral → sambanova).
+groq → mistral). SambaNova sengaja tidak ikut rantai — free tier-nya kini
+menuntut metode pembayaran (402); aktifkan billing lalu kembalikan ke
+`FALLBACK_ORDER` di `worker.js` bila diperlukan.
 
 **Override bila perlu:**
 

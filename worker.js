@@ -72,7 +72,7 @@ const PROVIDERS = {
   groq: {
     baseUrl: 'https://api.groq.com/openai/v1',
     apiKeyEnv: 'GROQ_API_KEY',
-    defaultModel: 'llama-3.3-70b-versatile',
+    defaultModel: 'openai/gpt-oss-120b',
   },
   mistral: {
     baseUrl: 'https://api.mistral.ai/v1',
@@ -86,7 +86,11 @@ const PROVIDERS = {
   },
 };
 
-const FALLBACK_ORDER = ['openrouter', 'groq', 'mistral', 'sambanova'];
+// SambaNova dikeluarkan dari rantai default: free tier-nya kini menuntut
+// metode pembayaran (402 PAYMENT_METHOD_REQUIRED) sehingga selalu gagal.
+// PROVIDERS tetap memuatnya supaya `provider: 'sambanova'` masih bisa
+// dipaksa dan rantai bisa dikembalikan setelah billing diaktifkan.
+const FALLBACK_ORDER = ['openrouter', 'groq', 'mistral'];
 
 // Nama model & slug provider di atas berubah dari waktu ke waktu —
 // cross-check di dashboard masing-masing provider sebelum deploy serius.
@@ -132,7 +136,23 @@ async function fetchWithTimeout(url, init, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    const text = await res.text();
+    // Body dibaca di sini selagi timer masih berjalan. Kalau upstream kirim
+    // header lalu berhenti menghasilkan isi (model reasoning lambat),
+    // abort tetap meledak -> ProviderTimeoutError, bukan dibiarin menggantung
+    // tanpa batas setelah header diterima.
+    const headers = new Headers(res.headers);
+    // text sudah terdekompresi; header encoding/length asli tidak boleh
+    // dibawa ke badan yang dibangun ulang.
+    headers.delete('content-length');
+    headers.delete('content-encoding');
+    const nullBody = res.status === 204 || res.status === 205 || res.status === 304;
+    return new Response(nullBody ? null : text, {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
   } catch (err) {
     if (controller.signal.aborted) throw new ProviderTimeoutError(timeoutMs);
     throw err;
@@ -143,6 +163,41 @@ async function fetchWithTimeout(url, init, timeoutMs) {
 
 function authRequired(env) {
   return env.AUTH_ENABLED === 'true';
+}
+
+/**
+ * Pilih model Groq pengganti lewat GET /openai/v1/models ketika model
+ * default-nya 404 (retired — kasus Groq 2026-08-16). Daftar /models tidak
+ * memuat harga; semua model aktif dapat kuota tier gratis/developer, jadi
+ * kandidat difilter: hanya yang `active`, hanya yang chat (whisper/guard/
+ * tts/dsb. dibuang), preferensi model production yang dikenal, fallback ke
+ * entri pertama. null = tanpa pemulihan (rantai lanjut seperti biasa).
+ */
+async function pickGroqReplacementModel(cfg, env) {
+  let res;
+  try {
+    res = await fetchWithTimeout(
+      `${cfg.baseUrl}/models`,
+      { headers: { Authorization: `Bearer ${env[cfg.apiKeyEnv]}` } },
+      envTimeoutMs(env, 'CHAT_TIMEOUT_MS', CHAT_TIMEOUT_MS),
+    );
+  } catch {
+    return null; // timeout / network -> tanpa pemulihan
+  }
+  if (!res.ok) return null;
+  const payload = await res.json().catch(() => null);
+  const list = Array.isArray(payload?.data)
+    ? payload.data
+    : Array.isArray(payload?.models)
+      ? payload.models
+      : [];
+  const chatIds = list
+    .filter((m) => m && (m.active ?? true) !== false)
+    .map((m) => (typeof m?.id === 'string' ? m.id : typeof m?.name === 'string' ? m.name : ''))
+    .filter((id) => id && !/whisper|guard|tts|embedding|rerank/i.test(id));
+  if (!chatIds.length) return null;
+  const preferred = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+  return preferred.find((p) => chatIds.includes(p) && p !== cfg.defaultModel) ?? chatIds[0];
 }
 
 /**
@@ -305,10 +360,53 @@ async function handleChat(request, env) {
       throw err;
     }
     if (!result) continue; // key belum di-set untuk provider ini
+    // Pemulihan model Groq: model DEFAULT-nya menjawab 404 (retired) dan
+    // client tidak memaksa `model` → GET /openai/v1/models sekali, pilih
+    // model aktif pengganti, ulangi Groq dengan model itu. Retry hanya
+    // sekali per request; kalau 404 lagi / /models gagal → perilaku persis
+    // seperti tanpa pemulihan (lanjut rantai seperti biasa).
+    if (id === 'groq' && result.res.status === 404 && !body.model) {
+      const replacement = await pickGroqReplacementModel(cfg, env);
+      if (replacement) {
+        try {
+          const retry = await callProvider(id, cfg, env, { ...body, model: replacement });
+          if (retry) result = retry;
+        } catch (err) {
+          if (err instanceof ProviderTimeoutError) timedOut = true; // pakai 404 asli
+          else throw err;
+        }
+      }
+    }
     lastResult = result;
     if (result.res.ok) {
-      const data = await result.res.json();
-      return Response.json({ ...data, _provider: id });
+      // Body dibaca sebagai teks dulu supaya bisa dipassthrough utuh kalau
+      // ternyata tidak usable (model reasoning mengisi `reasoning` dengan
+      // content null, choices kosong, atau badan non-JSON).
+      let rawText = null;
+      let data = null;
+      try {
+        rawText = await result.res.text();
+        data = JSON.parse(rawText);
+      } catch {
+        data = null;
+      }
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content === 'string' && content.trim() !== '') {
+        return Response.json({ ...data, _provider: id });
+      }
+      // 200 tanpa konten usable -> provider ini dianggap gagal dan rantai
+      // fallback lanjut (sejajar "hang = gagal" Task #013). Badan asli
+      // disimpan sebagai lastResult agar tetap ter-passthrough utuh kalau
+      // semua provider gagal — client-lah yang memunculkan error shape-nya.
+      lastResult = {
+        id,
+        res: new Response(rawText ?? '', {
+          status: result.res.status,
+          headers: {
+            'Content-Type': result.res.headers.get('Content-Type') || 'application/json',
+          },
+        }),
+      };
     }
     // 429 / 5xx dari provider ini -> lanjut coba provider berikutnya
   }

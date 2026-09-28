@@ -1,6 +1,6 @@
 ---
 project: meeting-assistant
-version: 1.0.9
+version: 1.0.14
 source: prd
 last_updated: 2026-09-28
 project_shape: fullstack
@@ -55,9 +55,10 @@ external_assets: false
   ├── vitest.frontend.config.js         # Project "frontend": environment jsdom
   ├── public/                # Frontend statis, di-serve oleh Worker
   │   ├── index.html
+  │   ├── main.js             # Bootstrap CSP-safe: panggil initApp() utk index.html
   │   ├── app.js               # Entry point UI
   │   ├── config.js             # Konstanta konfigurasi (MAX_CONTEXT_CHARS, dll)
-  │   ├── audio-capture.js      # getUserMedia + getDisplayMedia + chunking
+  │   ├── audio-capture.js      # getUserMedia + getDisplayMedia + mix mic/tab + chunking
   │   ├── providers.js           # Helper client utk /api/chat, /api/transcribe
   │   └── styles.css
   └── test/
@@ -162,6 +163,19 @@ external_assets: false
   Timeouts are env-configurable with defaults `CHAT_TIMEOUT_MS=15000`
   and `TRANSCRIBE_TIMEOUT_MS=30000`; a hung provider counts as failed so
   the chat fallback chain advances instead of hanging
+  Local exception (unusable success body): a 200 response whose body has
+  no non-empty `choices[0].message.content` string (reasoning-only models
+  answering with `content: null`, empty `choices`, or a non-JSON body)
+  counts as failed so the fallback chain advances; when every provider is
+  unusable, the last actual 200 body is passed through unchanged and the
+  client surfaces its shape error (`choices[0].message.content +
+  _provider`)
+  Local exception (Groq model recovery): when Groq's default model
+  answers 404 (`model_not_found`, e.g. after a model retirement) and the
+  request did not force `model`, the Worker GETs `/openai/v1/models` and
+  retries Groq once with an active non-audio replacement (known
+  production IDs preferred); if that list fetch or the retry fails, the
+  chain advances exactly as without recovery
 - Pagination: none
 
 ## 6. UI / UX Constraints
@@ -292,11 +306,23 @@ external_assets: false
   - Mistral La Plateforme free tier: ~1 req/sec (verify current limit on
     their dashboard)
   - SambaNova Cloud free tier: exact request limits unverified — check
-    their dashboard
+    their dashboard; as of 2026-09-28 a payment method is required
+    (402 `PAYMENT_METHOD_REQUIRED`), so it sits **outside** `FALLBACK_ORDER`
+    (still in `PROVIDERS` for forced use; restore the chain entry once
+    billing is enabled)
+  - Groq retired `llama-3.3-70b-versatile` and `llama-3.1-8b-instant`
+    for free/developer tiers on 2026-08-16 → 404 `model_not_found`;
+    `PROVIDERS.groq.defaultModel` now uses `openai/gpt-oss-120b` (the
+    production-tier replacement)
   - `getDisplayMedia` system-audio capture only works fully in
     Chromium-based browsers (Chrome/Edge) on Windows/Linux/ChromeOS;
     Firefox and Safari do not forward audio this way; macOS only
     forwards tab audio, not full system audio
+  - Meeting capture mixes the microphone into the shared tab/system
+    audio via Web Audio (`mixAudioStreams` in `audio-capture.js`), so
+    both sides land in one recording; if mic permission is denied the
+    round still runs with system audio only (status shows
+    `Merekam (mikrofon tidak aktif)`), never a hard failure
   - `@cloudflare/vitest-pool-workers` loads a developer's local `.dev.vars`
     (real API keys, auth toggles) into the worker test runtime: a local
     `AUTH_ENABLED=false` silently disables auth in the suite and lets
