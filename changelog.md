@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.8
-changelog_version: 1.0.16
+changelog_version: 1.0.17
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,22 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #014 — Verify Fallback Handles Provider-Specific 429s
-- **Phase:** Phase 4 — Integration
-- **Scope:** Confirm the fallback chain correctly advances specifically on a 429 (not only generic 5xx) from each of the four providers, matching the per-provider rate limits documented in @knowledge §9.
-- **Files to create / modify:** `test/worker.test.js`
-- **Acceptance criteria:**
-  - [ ] A mocked 429 from OpenRouter causes fallback to Groq
-  - [ ] A mocked 429 from every provider in the chain returns the last provider's actual 429 status/body to the client, not a generic 500
-  - [ ] Unit test written and passing for new logic
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #005
-- **Decisions made:** _(fill after execution — never leave blank)_
-
-## [NEXT TASKS]
-
-### Phase 5 — UI/UX
 
 #### Task #015 — XSS-Safe Rendering for Transcript & AI Output
 - **Phase:** Phase 5 — UI/UX
@@ -38,6 +22,8 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #012
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+## [NEXT TASKS]
 
 ### Phase 6 — Testing & QA
 
@@ -539,3 +525,33 @@ simple_mode: true
   - [TEST] Mutation verification, 5 rounds: (A) `fetchWithTimeout` drops the AbortSignal → 6 failed; (B) fallback loop stops advancing on `ProviderTimeoutError` → 3 failed; (C) `X-Frame-Options` header removed → 2 failed; (D) `envTimeoutMs` accepts `0` → 1 failed; (E) transcribe stops mapping timeout → 504 → 1 failed; each reverted individually, 114/114 green after restore
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Deviations: `test/worker.test.js` is outside the task's `Files to create / modify` — required by the AC "Unit test written and passing" (same precedent as #009/#010/#011/#012); `.dev.vars.example` documents the new optional env vars; `knowledge.md` updated per #003's same-task error-contract precedent. `npm audit`: 4 high — pre-existing dev-toolchain only (`sharp`/`miniflare`/`wrangler` under `@cloudflare/vitest-pool-workers`), no runtime dependency reaches the Worker, fix requires breaking downgrade → not applied. Stage-1 load smoke delegated to #019 (Scalability FULL). Pre-existing observations stand: ESLint absent (#003); `public/index.html`/`styles.css` still missing → the new CSP cannot be exercised in a real browser until #016. Forward impact: `test/worker.test.js` also modified by #014/#016 (tracked, intentional); `worker.js` previously modified by #003/#004/#010A — branch cut from current dev tip, no conflicts.
 - **Knowledge drift:** UPDATE REQUIRED (found during execution — no tag was on the task): @knowledge §5 error-response contract gained a second local exception — timeout plain-text 504 for both endpoints, env names/defaults, and "hung provider advances the fallback chain"; edit applied this task; version bumped 1.0.7 → 1.0.8, `knowledge_version` synced. §8 required-vars list intentionally untouched — `CHAT_TIMEOUT_MS`/`TRANSCRIBE_TIMEOUT_MS` are optional overrides, documented in `.dev.vars.example` instead.
+
+### Task #014 — Verify Fallback Handles Provider-Specific 429s ✅
+- **Completed:** 2026-09-28
+- **Phase:** Phase 4 — Integration
+- **Status:** OK
+- **Branch:** feat/task-014-429-fallback-tests
+- **Files created / modified:**
+  - `test/worker.test.js` — **modified**: fallback-chain describe renamed `(Task #005)` → `(Task #005, #014)` (precedent: the `(Task #006, #010A)` multi-task describe), 3 new tests inside it reusing that block's `respond`/`envWith`/fetch-swap infrastructure: 429 from OpenRouter → fallback advances to Groq (200, `_provider: 'groq'`, call order `['openrouter.ai','api.groq.com']`); 429 from every provider in the chain → client receives the last provider's actual 429 status + its own body (`"marker":"sn"`, SambaNova) with all four attempted in `FALLBACK_ORDER`, not a generic 500; forced-provider 429 → passed through unchanged with the rest of the chain skipped (`outboundCalls` = only `api.groq.com`)
+- **Acceptance criteria met:**
+  - [x] A mocked 429 from OpenRouter causes fallback to Groq — asserts 200 + `_provider: 'groq'` + outbound order
+  - [x] A mocked 429 from every provider in the chain returns the last provider's actual 429 status/body to the client, not a generic 500 — status asserted `429` (≠500), body asserted `'"marker":"sn"'` (last provider's own payload passed through), exact 4-call order
+  - [x] Unit test written and passing for new logic (3 tests; no production change needed — the chain already treats any non-2xx as "advance" (#005) and passes the last real response through (#013's matrix preserved it); this task proves both specifically for 429)
+  - [x] Test is isolated: sets up and tears down its own state — tests live in #005's describe whose `beforeEach` rebuilds `routes`/`outboundCalls` and swaps `globalThis.fetch` and `afterEach` restores it; synthetic `envWith` per test; no KV state touched
+- **Security gate:** FULL — all checks passed (tests-only diff — `git status` shows exactly one modified file, `test/worker.test.js`) [— simple_mode: 3 items skipped, scale-apparatus only; security baseline never skipped]
+  - BASIC: [x] no secrets hardcoded (dummy keys only, same style as #005's existing tests) · [x] sensitive config from env/secure config only (unchanged) · [x] no eval()/exec() with external input (none added) · [x] error messages expose no stack traces/internal paths (assertions read existing plain messages) · [x] CORS whitelist — N/A, no CORS code (unchanged) · [x] `.gitignore` has `.env`, `*.pem`, `*.key`, `*.p12` (re-verified this task) · [x] pre-commit hook active — re-verified (throwaway `verify-hook.pem` staged with `-f` → `COMMIT DITOLAK`, no commit created; `.dev.vars` untouched per §9) · [x] CI/CD secret masking — N/A, no pipeline (§8) · [x] Dockerfile ARG secret — N/A, no container orchestration (§2)
+  - STANDARD: [x] external input validated — no new input path; tests exercise the existing validated `/api/chat` body · [x] no catastrophic-backtracking regexes (none added) · [x] request body size limits — unchanged (#008/#009) · [x] auth on protected routes — unchanged; new tests use #005's established `AUTH_ENABLED:'false'` focus pattern with auth covered by dedicated describes · [x] authorization at service layer — N/A (single user) · [x] parameterized queries — N/A (no DB) · [x] file paths from user input — N/A · [x] PII not in logs — zero `console.*` calls in the test file (grep-verified; #004 guardrail green) · [x] log injection — N/A (no logging) · [x] HTML output escaped — N/A (JSON/text assertions only) · [x] redirect allowlist — N/A · [x] brute force — unchanged KV lockout · [x] password reset tokens — N/A · [x] session regeneration after login — N/A (per-request Bearer) · [x] Set-Cookie — none · [x] mobile/desktop secure storage — N/A · [x] HTTP method override — none · [x] Content-Type validated before body — unchanged (pre-existing #003 observation; new tests POST without Content-Type, consistent with precedent) · [x] API schema additive-only — no server/API change (tests only)
+  - FULL: [x] unauthenticated rate limit per IP — skipped-per-simple_mode · [x] authenticated rate limit via shared store — skipped-per-simple_mode (confirmed single-instance) · [x] infrastructure rate limiting — skipped-per-simple_mode · [x] CSRF — satisfied by design, unchanged (Authorization header from localStorage, never a cookie) · [x] security headers HSTS / X-Frame-Options / X-Content-Type-Options — in place since #013; both header tests still green in this run · [x] CSP without 'unsafe-inline'/'unsafe-eval' — in place since #013, still green · [x] constant-time comparison for secret equality — `tokensMatch` unchanged (#010A), its tests green · [x] JWT algorithm pinning — N/A, no JWT (PRD §6.2 decided Bearer) · [x] CVE scan — re-run this task: 4 high / 0 critical, all pre-existing dev-only toolchain (`sharp` ← `miniflare` ← `wrangler` under `@cloudflare/vitest-pool-workers`), zero runtime deps reach the Worker, `package*.json` unchanged; only available fix is a breaking downgrade → not applied (documented #013) · [x] lockfile pins versions; CI uses clean-install — lockfile v3 present; no CI pipeline exists (§8 manual deploys) · [x] API responses only necessary fields; mass assignment protection — no server change; `_provider` passthrough contract unchanged · [x] sensitive fields encrypted at rest — N/A (no data at rest; keys are platform secrets) · [x] SSRF prevention — unchanged, outbound URLs constants-only (#013) · [x] XML input XXE — N/A, no XML · [x] CDN assets use SRI — N/A (`external_assets: false`, no CDN per §2/§6) · [x] error tracking scrubs PII — N/A, no error-tracking tool (§8 explicit decision) · [x] inbound webhook signature — N/A, no inbound webhooks (§5)
+- **Scalability gate:** FULL — all checks passed [— simple_mode: 5 items skipped, all scale-apparatus only: unauthenticated rate limit, auth rate-limit shared store, infra rate limiting, caching (PRD §6.3 "Caching: none"), circuit breaker]
+  - BASIC: [x] no sync blocking in async handlers (unchanged) · [x] no hardcoded pool sizes/timeouts/batch limits — timeouts env-driven since #013, unchanged · [x] DB connection pool — N/A (no DB) · [x] external I/O explicit timeouts — in place since #013 (`fetchWithTimeout`), unmodified · [x] no global mutable state across concurrent requests — server unchanged; test-side state (`routes`, `outboundCalls`, fetch swap) rebuilt per test in `beforeEach` and restored in `afterEach` · [x] correlation ID — N/A per §8 minimal-observability decision · [x] structured logger/crash reporter — N/A per §8 explicit decision
+  - STANDARD: [x] query plan check — N/A (no DB) · [x] no N+1 — request pattern unchanged · [x] list pagination — N/A (no list endpoints) · [x] all I/O async/non-blocking · [x] no unbounded memory accumulation — unchanged · [x] soft-delete — N/A · [x] multi-table writes in transaction — N/A · [x] non-blocking migrations — N/A · [x] GraphQL limits — N/A
+  - FULL: [x] caching implemented and tested — skipped-per-simple_mode · [x] DB pooling config verified — N/A (no DB) · [x] stateless: no in-process session/user state — unchanged (auth re-verified per request) · [x] long ops: background jobs — N/A (none) · [x] resources released on completion/error — test fetch swap released in `afterEach` (existing hooks); no server resources added · [x] outbound HTTP: explicit timeouts — in place since #013 · [x] circuit breaker/fallback per external integration — the fallback chain is the covered mechanism (this task verifies it on 429); the circuit breaker itself skipped-per-simple_mode · [x] queue depth bounded; backpressure — N/A (no queues) · [x] infrastructure rate limiting — skipped-per-simple_mode · [x] idempotency key for retryable/webhook operations — N/A (no retries/webhooks; chat is never auto-retried) · [x] health endpoints per §8 — N/A per PRD §6.5 explicit decision ("Health endpoints: not needed — decided") · [x] load baseline Stage 1 smoke — structurally delegated to Task #019 (requires the deployed Worker from #017; no local Cloudflare network path, documented #001 — recorded identically in #013); Stage 2 skipped-per-simple_mode · [x] Static-Hosting Core Web Vitals — N/A (fullstack server shape) · [x] App-Store/Installer staged rollout — N/A (wrong variant)
+- **Observability gate:** N/A — Phase 7 only
+- **Regression:** Passed 117 (114 baseline + 3 new), 0 failed (`npm test` → `vitest run`, 11 files, 6.47s); no order-dependent failures (lockout tests still assert a clean-KV start); mutation verification: 3 rounds (see Decisions)
+- **Decisions made:**
+  - [TEST] Tests placed inside #005's existing fallback describe — renamed to `(Task #005, #014)` per the `(Task #006, #010A)` multi-task precedent — instead of a third copy of the fetch-swap mock boilerplate: 429 behavior *is* fallback-chain behavior, and that block's `respond`/`envWith`/`outboundCalls` infrastructure is exactly what the ACs need; the rename makes shared ownership explicit
+  - [TEST] Added a third case beyond the two literal ACs: forced-provider 429 passthrough — the "not a generic 500" promise must also hold when the chain is entered via `provider: 'groq'`; mutation C showed #005's two forced-provider tests double as regression guards over the same line (3 failed = new test + those 2)
+  - [TEST] Mutation verification, 3 rounds against `worker.js`: (A) 429 treated as success (`res.ok || status===429`) → exactly 3 failed (all new tests); (B) passthrough status masked to 500 → exactly 2 failed (the two status/body AC tests); (C) forced-provider order dropped → 3 failed; each reverted individually, 117/117 green after restore; `worker.js` ends this task byte-identical to its committed state (only `test/worker.test.js` modified)
+  - [API] No production change: #005 designed "any non-2xx → advance" and #013's response matrix preserved "last real response passes through" — this task confirms both hold specifically for 429 with real-shaped rate-limit bodies (per §9: OpenRouter 20 req/min, Groq 20 req/min, etc.); no time-window simulation (that would test the providers, not this Worker)
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Clean scope: `git status` shows only `test/worker.test.js` modified — matches the task's file list exactly, first task with zero deviations. `npm audit` re-run: same 4 high as #013 (dev-only, breaking-downgrade-only fix, not applied). Pre-existing observations stand: ESLint absent (#003); `public/index.html`/`styles.css` missing (#016). Forward impact: none for this file — #015 touches `public/*`, #016 creates `test/integration.test.js`; #016's dependency on #014 is now satisfied.
+- **Knowledge drift:** none — 429-advance + last-response passthrough is exactly §5's documented contract ("upstream response body passed through unmodified", fallback on failure) and §9 already records the per-provider rate limits the mocks mirror; no library (§2), naming (§4), pattern/module (§3), API URL (§5), error handling (§4), infra (§8), or delete-strategy (§7) change; test isolation follows §4's per-test setup/teardown. Asset manifest: N/A (`external_assets: false`).

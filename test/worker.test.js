@@ -136,7 +136,7 @@ describe('token comparison (Task #010A)', () => {
   });
 });
 
-describe('chat provider fallback chain (Task #005)', () => {
+describe('chat provider fallback chain (Task #005, #014)', () => {
   // cloudflare:test@0.22.0 tidak mengekspor fetchMock, jadi interceptor
   // outbound dipasang dengan mengganti globalThis.fetch per test dan
   // dikembalikan di afterEach — tiap test memasang & membersihkan mock-nya
@@ -264,6 +264,65 @@ describe('chat provider fallback chain (Task #005)', () => {
     expect(res.status).toBe(500);
     expect(await res.text()).toContain('Tidak ada provider');
     expect(outboundCalls).toEqual([]);
+  });
+
+  it('advances to the next provider on a 429 rate-limit response (not only generic 5xx)', async () => {
+    // 429 = sinyal rate-limit per @knowledge §9 (mis. OpenRouter 20 req/min);
+    // rantai harus memperlakukannya seperti gagal dan lanjut ke berikutnya.
+    routes['openrouter.ai'] = () =>
+      respond(429, { error: { message: 'Rate limit exceeded for model' } });
+    routes['api.groq.com'] = () =>
+      respond(200, { choices: [{ message: { content: 'jawaban groq' } }] });
+
+    const res = await worker.fetch(
+      chatRequest(),
+      envWith({ OPENROUTER_API_KEY: 'or-key', GROQ_API_KEY: 'gq-key' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json())._provider).toBe('groq');
+    expect(outboundCalls).toEqual(['openrouter.ai', 'api.groq.com']);
+  });
+
+  it('returns the last provider actual 429 status and body when every provider rate-limits', async () => {
+    // Empat 429 berurutan: klien harus menerima 429 asli dari provider
+    // terakhir (SambaNova) — bukan 500 generik — dengan rantai dicoba semua.
+    routes['openrouter.ai'] = () => respond(429, { marker: 'or' });
+    routes['api.groq.com'] = () => respond(429, { marker: 'gq' });
+    routes['api.mistral.ai'] = () => respond(429, { marker: 'mi' });
+    routes['api.sambanova.ai'] = () => respond(429, { marker: 'sn' });
+
+    const res = await worker.fetch(
+      chatRequest(),
+      envWith({
+        OPENROUTER_API_KEY: 'k1',
+        GROQ_API_KEY: 'k2',
+        MISTRAL_API_KEY: 'k3',
+        SAMBANOVA_API_KEY: 'k4',
+      }),
+    );
+
+    expect(res.status).toBe(429);
+    expect(await res.text()).toContain('"marker":"sn"');
+    expect(outboundCalls).toEqual([
+      'openrouter.ai',
+      'api.groq.com',
+      'api.mistral.ai',
+      'api.sambanova.ai',
+    ]);
+  });
+
+  it('passes a 429 through unchanged when a forced provider rate-limits (chain skipped)', async () => {
+    routes['api.groq.com'] = () => respond(429, { marker: 'forced-gq' });
+
+    const res = await worker.fetch(
+      chatRequest({ messages: [], provider: 'groq' }),
+      envWith({ OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2' }),
+    );
+
+    expect(res.status).toBe(429);
+    expect(await res.text()).toContain('"marker":"forced-gq"');
+    expect(outboundCalls).toEqual(['api.groq.com']);
   });
 });
 
