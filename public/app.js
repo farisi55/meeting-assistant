@@ -87,6 +87,16 @@ export function saveContext(storage, fields) {
 }
 
 /**
+ * Render untrusted text (transcript, AI output, user-supplied context) as
+ * literal DOM text — always via textContent, never an HTML sink (knowledge
+ * §6). Null/undefined render as empty text. Returns the element for chaining.
+ */
+export function renderText(el, text) {
+  el.textContent = text == null ? '' : String(text);
+  return el;
+}
+
+/**
  * Mount the context-upload panel into root. Shows a visible per-field
  * validation message when over cap, blocks the save action, and restores
  * previously saved text (localStorage survives page reloads). Returns
@@ -323,11 +333,11 @@ export function mountSteerPanel(root, { fetchFn, ...chatOptions } = {}) {
     status.textContent = 'Menyusun...';
     try {
       const result = await draftSteer(textarea.value, { fetchFn, ...chatOptions });
-      output.textContent = result.text;
+      renderText(output, result.text);
       copyButton.hidden = false;
       status.textContent = `Disusun oleh ${result.provider}`;
     } catch (err) {
-      output.textContent = '';
+      renderText(output, '');
       copyButton.hidden = true;
       error.textContent = err?.message || 'Gagal menyusun respons';
       error.hidden = false;
@@ -539,9 +549,9 @@ export function mountPracticePanel(root, { fetchFn, storage = globalThis.localSt
 
   /** Sync the DOM with the session — the only place feedback visibility changes. */
   const render = () => {
-    question.textContent = session.question;
+    renderText(question, session.question);
     if (answer.value !== session.answer) answer.value = session.answer;
-    feedback.textContent = session.feedback;
+    renderText(feedback, session.feedback);
     feedback.hidden = session.phase !== PRACTICE_PHASE.FEEDBACK;
     answer.readOnly = session.phase !== PRACTICE_PHASE.ANSWERING;
     const canMark =
@@ -746,10 +756,10 @@ export function mountMeetingPanel(root, { fetchFn, storage = globalThis.localSto
       }
       const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
       const { text: transcriptText } = await transcribe(blob, { fetchFn, ...chatOptions });
-      transcriptEl.textContent = transcriptText; // transkrip tampil sebelum draft diminta
+      renderText(transcriptEl, transcriptText); // transkrip tampil sebelum draft diminta
       status.textContent = note ? `${note} — menyusun respons...` : 'Menyusun respons...';
       const reply = await draftFromTranscript(transcriptText, { fetchFn, storage, ...chatOptions });
-      outputEl.textContent = reply.text;
+      renderText(outputEl, reply.text);
       status.textContent = note ? `${note} — draft dari ${reply.provider}` : `Draft dari ${reply.provider}`;
     } catch (err) {
       showError(err, 'Gagal memproses audio meeting');

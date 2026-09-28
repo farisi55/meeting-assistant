@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.8
-changelog_version: 1.0.17
+changelog_version: 1.0.18
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,22 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #015 — XSS-Safe Rendering for Transcript & AI Output
-- **Phase:** Phase 5 — UI/UX
-- **Scope:** Ensure every place that renders transcript text, AI responses, or uploaded context uses safe DOM text APIs exclusively, per @knowledge §6 — transcript content originates from a third party and must be treated as untrusted. Subresource Integrity is not applicable (no CDN-loaded scripts in this architecture).
-- **Files to create / modify:** `public/app.js`, `public/audio-capture.js`
-- **Acceptance criteria:**
-  - [ ] A transcript chunk containing `<script>` or HTML-special characters renders as literal visible text, never as parsed markup
-  - [ ] No `innerHTML` assignment anywhere in the codebase receives unescaped transcript/response/context content (grep-verifiable)
-  - [ ] Unit test written and passing for new logic (render helper tested with a malicious-looking input string)
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #012
-- **Decisions made:** _(fill after execution — never leave blank)_
-
-## [NEXT TASKS]
-
-### Phase 6 — Testing & QA
 
 #### Task #016 — Full Suite Run & End-to-End Integration Test
 - **Phase:** Phase 6 — Testing & QA
@@ -39,6 +23,8 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #005, Task #006, Task #013, Task #014
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+## [NEXT TASKS]
 
 ### Phase 7 — Deployment (Server variant)
 
@@ -555,3 +541,34 @@ simple_mode: true
   - [API] No production change: #005 designed "any non-2xx → advance" and #013's response matrix preserved "last real response passes through" — this task confirms both hold specifically for 429 with real-shaped rate-limit bodies (per §9: OpenRouter 20 req/min, Groq 20 req/min, etc.); no time-window simulation (that would test the providers, not this Worker)
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Clean scope: `git status` shows only `test/worker.test.js` modified — matches the task's file list exactly, first task with zero deviations. `npm audit` re-run: same 4 high as #013 (dev-only, breaking-downgrade-only fix, not applied). Pre-existing observations stand: ESLint absent (#003); `public/index.html`/`styles.css` missing (#016). Forward impact: none for this file — #015 touches `public/*`, #016 creates `test/integration.test.js`; #016's dependency on #014 is now satisfied.
 - **Knowledge drift:** none — 429-advance + last-response passthrough is exactly §5's documented contract ("upstream response body passed through unmodified", fallback on failure) and §9 already records the per-provider rate limits the mocks mirror; no library (§2), naming (§4), pattern/module (§3), API URL (§5), error handling (§4), infra (§8), or delete-strategy (§7) change; test isolation follows §4's per-test setup/teardown. Asset manifest: N/A (`external_assets: false`).
+
+### Task #015 — XSS-Safe Rendering for Transcript & AI Output ✅
+- **Completed:** 2026-09-28
+- **Phase:** Phase 5 — UI/UX
+- **Status:** OK
+- **Branch:** feat/task-015-xss-safe-rendering
+- **Files created / modified:**
+  - `public/app.js` — **modified**: new exported `renderText(el, text)` helper (textContent-only choke point for untrusted text, null/undefined → empty, §6 rule made structural); all five untrusted-content render sites routed through it — Steer output (`renderText(output, result.text)` + its error-clear), practice `question`/`feedback`, meeting `transcriptEl`/`outputEl`; static labels/status lines unchanged (string literals, not untrusted content); context upload intentionally keeps `textarea.value =` (value is text by construction — `textContent` would not populate a textarea)
+  - `test/frontend/xss-render.test.js` — **created**: 6 tests — helper unit tests with a malicious payload (`<script>`, `onerror` img, `<b>`, `&amp;`: literal textContent, zero child elements, no script/img/b nodes; null/undefined → empty), AC1 full meeting-panel flow with stubbed capture+network (transcript AND draft both carrying EVIL render literally, `childElementCount === 0`, `window.__xss` never set), saved-context restore into textarea as literal value, and the AC2 source-scan guardrail over all `public/*.js` (comments stripped, zero `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`) plus an assertion that all five content sites route through `renderText`
+  - `public/audio-capture.js` — **verified, unchanged**: pure media module (MediaStream/MediaRecorder only) with no DOM rendering — no sinks to fix
+- **Acceptance criteria met:**
+  - [x] A transcript chunk containing `<script>` or HTML-special characters renders as literal visible text, never as parsed markup — full panel flow test: transcribe returns EVIL → `meeting-transcript.textContent` is the exact string, `childElementCount === 0`, no `script`/`img` nodes, `window.__xss` undefined; the AI draft (also EVIL) renders identically
+  - [x] No `innerHTML` assignment anywhere in the codebase receives unescaped transcript/response/context content (grep-verifiable) — automated as a permanent source-scan test: all four `public/*.js` modules scanned with comments stripped for the four HTML sinks → zero matches; mutation C proved the scan catches a sink even at a site with no dedicated content test
+  - [x] Unit test written and passing for new logic (6 tests; `renderText` tested directly with a malicious-looking input string)
+  - [x] Test is isolated: sets up and tears down its own state — fresh `root` per test, `localStorage.clear()` in both hooks, `mediaDevices`/`MediaRecorder` descriptors restored in `afterEach`, helper/guardrail tests are pure read-only DOM/source checks
+- **Security gate:** STANDARD — all checks passed (Phase 5 tier; HIGH-RISK OVERRIDE not triggered — no auth/session/credential/token code touched) [— simple_mode: 0 items skipped; security baseline is never skipped]
+  - BASIC: [x] no secrets hardcoded (test payload is markup, no credentials) · [x] sensitive config from env/secure config only (unchanged) · [x] no eval()/exec() with external input (grep: 0 matches for `eval(`/`new Function` across all four `public/*.js`) · [x] error messages expose no stack traces/internal paths (unchanged) · [x] CORS whitelist — N/A, no CORS code, same-origin per §9 · [x] `.gitignore` has `.env`, `*.pem`, `*.key`, `*.p12` (re-verified) · [x] pre-commit hook active — re-verified (throwaway `verify-hook.pem` staged with `-f` → `COMMIT DITOLAK`, no commit created; `.dev.vars` untouched per §9) · [x] CI/CD secret masking — N/A, no pipeline (§8) · [x] Dockerfile ARG secret — N/A, no container orchestration (§2)
+  - STANDARD: [x] external input validated and sanitized — rendering-side encoding is this task's sanitization: untrusted text never enters an HTML parser (renderText/textContent + guardrail); request inputs unchanged · [x] input-validation regexes catastrophic-backtracking — the guardrail's comment-stripper uses `/\/\/.*$/` (linear, no nesting) and `includes`, no ReDoS-prone pattern added · [x] request body size limits — unchanged (#008/#009) · [x] authentication on every protected route — unchanged (Worker `/api/*` guard untouched; #010A tests green) · [x] authorization at service layer — N/A (single user, no resource IDs) · [x] DB parameterized queries — N/A (no DB) · [x] file paths from user input sanitized — guardrail reads fixed repo-relative paths only, no user input · [x] PII not in logs — zero `console.*` added; #004 guardrail green · [x] log injection — N/A (no logging) · [x] **HTML output escaped (web) — this task's core**: every transcript/AI/context render goes through `renderText`/textContent (never parsed); proven with a malicious payload at helper level, panel level, and context-restore level, and enforced permanently by the source-scan guardrail · [x] redirect allowlist — N/A (no redirects) · [x] brute force — unchanged KV lockout · [x] password reset tokens — N/A · [x] session regeneration after login — N/A (per-request Bearer) · [x] Set-Cookie — no cookies · [x] mobile/desktop secure storage — web shape; token storage unchanged · [x] HTTP method override — none · [x] Content-Type validated before body — unchanged (pre-existing #003 observation, not this diff) · [x] API schema additive-only — no server/API change
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped (no skippable items in BASIC/STANDARD for this shape)]
+  - BASIC: [x] no sync blocking in async handlers (panel flows unchanged, all awaits preserved) · [x] no hardcoded pool sizes/timeouts/batch limits — request timeouts stay config-driven in `providers.js` (unchanged) · [x] DB connection pool — N/A (no DB) · [x] external I/O explicit timeouts — inherited `AbortSignal.timeout` from `providers.js` (unchanged) · [x] no global mutable state across concurrent requests — `renderText` is a pure function with no module state; panel state stays in closures (unchanged discipline) · [x] correlation ID — N/A per §8 minimal-observability decision · [x] structured logger/crash reporter — N/A per §8 explicit decision
+  - STANDARD: [x] query plan check — N/A (no DB) · [x] no N+1 — request pattern unchanged (1 transcribe + 1 chat per round) · [x] list pagination — N/A (no list endpoints) · [x] all I/O async/non-blocking · [x] no unbounded memory accumulation — unchanged (per-round overwrite, stream released) · [x] soft-delete — N/A (no stored entities) · [x] multi-table writes in transaction — N/A · [x] non-blocking migrations — N/A · [x] GraphQL limits — N/A
+- **Observability gate:** N/A — Phase 7 only
+- **Regression:** Passed 123 (117 baseline + 6 new), 0 failed (`npm test` → `vitest run`, 12 files, 7.17s); no order-dependent failures; mutation verification: 3 rounds (see Decisions)
+- **Decisions made:**
+  - [PATTERN] Interpretation of AC3's "render helper": considered (1) verify-only with no production change (all sites already used textContent), (2) a `renderText(el, text)` helper routed only through the five untrusted-content sites — picked (2): the AC names a helper explicitly, knowledge §6's rule then has one structural choke point instead of a per-site convention (same rationale as #011 making §7 structural), and the "second real call site" condition is met five times over; static labels/status literals keep direct `textContent` — the helper exists for *untrusted* text, and wrapping string literals would be churn without safety value
+  - [ARCH] Context upload deliberately does NOT route through `renderText`: `textarea.value` is text by construction (never parsed as markup) and `textContent` would not populate a textarea's value — covered instead by a dedicated restore-with-payload test asserting literal `.value`
+  - [ARCH] Scope triaged `public/audio-capture.js` (in the task's file list) as verified-no-change: it is a pure media module (MediaStream/MediaRecorder) with zero DOM rendering — documented rather than churned
+  - [TEST] AC2's "grep-verifiable" is automated as a permanent source-scan guardrail (pattern from #004's logging guardrail): comments stripped first so documentation *mentioning* a sink as a forbidden example cannot false-positive; the scan covers all four `public/*.js`, not just this task's diff
+  - [TEST] Mutation verification, 3 rounds: (A) `renderText` body switched to an HTML sink → 4 failed (2 helper tests + AC1 meeting flow + an existing practice-panel §6 test — pre-existing coverage doubled as a guard); (B) meeting transcript site bypassed the helper → 3 failed (AC1 + both guardrail assertions); (C) Steer output site (no dedicated content test) given a sink → 2 failed (both guardrails) — proving the source-scan catches untested sites; each reverted individually, 123/123 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Deviation: `test/frontend/xss-render.test.js` is outside the task's file list — required by the AC "Unit test written and passing" (same precedent as #009/#010/#011/#012); `public/audio-capture.js` listed but unchanged (verified, see Decisions). Forward impact: none — no NEXT task lists `public/*.js` (#016 = `test/integration.test.js`, #017+ = deploy/docs). Pre-existing observations stand: ESLint absent (#003); `public/index.html`/`styles.css` still missing (#016) — the CSP added in #013 remains unexercisable in a real browser until then.
+- **Knowledge drift:** none — knowledge §6 already mandates exactly this contract ("rendered as text content (e.g. textContent), never injected via innerHTML unescaped"); code now implements and *enforces* it (guardrail), no contradiction; naming per §4 (camelCase helper, one-line docstring on the new export), no new library (§2), no new top-level folder (§3 — `test/frontend/` documented, file-level additions precedented by #009–#012), no API/error/infra/delete change, test isolation per §4. Asset manifest: N/A (`external_assets: false`).
