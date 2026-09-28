@@ -2,12 +2,20 @@
 // /api/* routes, knowledge §5), context-upload panel (CV / job description /
 // product knowledge) with client-side 5,000-char cap enforcement and
 // localStorage persistence (knowledge §7), the "Steer AI" response drafting
-// panel (knowledge §7), and the interview-practice panel whose state machine
-// gates feedback behind an explicit mark-complete (knowledge §7). Side-effect
-// free: the browser bootstraps via initApp(); tests mount panels directly.
+// panel (knowledge §7), the interview-practice panel whose state machine
+// gates feedback behind an explicit mark-complete (knowledge §7), and the
+// client-meeting pipeline panel (capture → transcribe → context-aware draft,
+// knowledge §3 data flow). Side-effect free: the browser bootstraps via
+// initApp(); tests mount panels directly.
 
+import {
+  startChunkedRecording,
+  startDisplayCapture,
+  stopStream,
+  watchTrackEnded,
+} from './audio-capture.js';
 import { MAX_CONTEXT_CHARS } from './config.js';
-import { ProvidersError, chat, getStoredAuthToken, setStoredAuthToken } from './providers.js';
+import { ProvidersError, chat, getStoredAuthToken, setStoredAuthToken, transcribe } from './providers.js';
 
 /** The three context fields accepted by the app, in display order (knowledge §7). */
 export const CONTEXT_FIELDS = [
@@ -393,17 +401,19 @@ export function applyPracticeEvent(session, event) {
   }
 }
 
+/** Clamp one context field to Task #008's MAX_CONTEXT_CHARS cap (knowledge §7). */
+export function clampContextField(value) {
+  const text = typeof value === 'string' ? value : '';
+  return text.length > MAX_CONTEXT_CHARS ? text.slice(0, MAX_CONTEXT_CHARS) : text;
+}
+
 /**
  * Assemble the CV + JD prompt context, clamped field-by-field to Task #008's
  * MAX_CONTEXT_CHARS cap (knowledge §7) so a stale over-cap stored value can
  * never reach a prompt above the limit.
  */
 export function buildPracticeContext(context) {
-  const clamp = (value) => {
-    const text = typeof value === 'string' ? value : '';
-    return text.length > MAX_CONTEXT_CHARS ? text.slice(0, MAX_CONTEXT_CHARS) : text;
-  };
-  return { cv: clamp(context?.cv), jd: clamp(context?.jd) };
+  return { cv: clampContextField(context?.cv), jd: clampContextField(context?.jd) };
 }
 
 /**
@@ -603,10 +613,200 @@ export function mountPracticePanel(root, { fetchFn, storage = globalThis.localSt
   };
 }
 
+// ── Pipeline data flow (Task #012, knowledge §3) ──────────────────────────
+
 /**
- * Browser bootstrap: mount the token-access, context-upload, Steer AI, and
- * interview-practice panels into the app root (defaults to #app). Called once
- * by index.html's module entry.
+ * System prompt for the active client-meeting mode (knowledge §3 data flow:
+ * "system: persona/CV/JD, user: transcript") — translate/summarize/draft
+ * grounded ONLY in the live transcript and the saved context, never inventing
+ * claims, prices, or commitments that neither source contains.
+ */
+export const MEETING_SYSTEM_PROMPT =
+  'You are a real-time meeting assistant in client-meeting mode. Using the live conversation transcript and the saved ' +
+  'context below, translate, summarize, and draft responses in the client language. ' +
+  'Rely only on facts present in the transcript or the saved context — never invent claims, prices, examples, or ' +
+  'commitments. Output only the requested help text.';
+
+/** Assemble the client-meeting context fields, each clamped to MAX_CONTEXT_CHARS (knowledge §7). */
+export function buildMeetingContext(context) {
+  return {
+    cv: clampContextField(context?.cv),
+    jd: clampContextField(context?.jd),
+    productKnowledge: clampContextField(context?.productKnowledge),
+  };
+}
+
+/** Build /api/chat messages for the meeting pipeline: mode persona + active saved context (system), transcript (user). */
+export function buildTranscriptMessages(transcript, context) {
+  const { cv, jd, productKnowledge } = buildMeetingContext(context);
+  return [
+    {
+      role: 'system',
+      content: `${MEETING_SYSTEM_PROMPT}\n\nCV:\n${cv}\n\nJob description:\n${jd}\n\nProduct knowledge:\n${productKnowledge}`,
+    },
+    { role: 'user', content: transcript },
+  ];
+}
+
+/**
+ * Draft a context-aware response to a transcript via POST /api/chat
+ * (knowledge §3). Reads the saved context at call time, so the draft always
+ * reflects the currently active mode's context; rejects with ProvidersError
+ * VALIDATION — before any network call — on an empty transcript.
+ */
+export async function draftFromTranscript(transcript, options = {}) {
+  const text = typeof transcript === 'string' ? transcript.trim() : '';
+  if (!text) {
+    throw new ProvidersError('Transkrip kosong', { code: 'VALIDATION', endpoint: '/api/chat' });
+  }
+  const { storage = globalThis.localStorage, ...chatOptions } = options;
+  return chat(buildTranscriptMessages(text, loadContext(storage)), chatOptions);
+}
+
+/**
+ * Mount the client-meeting pipeline panel into root (knowledge §3): share
+ * system audio → chunked recording → POST /api/transcribe → transcript
+ * rendered → context-aware POST /api/chat → drafted response rendered.
+ * Returns { destroy() } which unmounts the panel.
+ */
+export function mountMeetingPanel(root, { fetchFn, storage = globalThis.localStorage, ...chatOptions } = {}) {
+  const panel = document.createElement('section');
+  panel.dataset.testid = 'meeting-panel';
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Meeting Klien';
+  panel.append(heading);
+
+  const hint = document.createElement('p');
+  hint.textContent =
+    'Bagikan audio tab/sistem (centang "Bagikan audio"), jalankan meeting, lalu berhenti — transkrip dan draft respons tampil di bawah.';
+  panel.append(hint);
+
+  const startButton = document.createElement('button');
+  startButton.type = 'button';
+  startButton.dataset.testid = 'meeting-start';
+  startButton.textContent = 'Bagikan audio & mulai';
+
+  const stopButton = document.createElement('button');
+  stopButton.type = 'button';
+  stopButton.dataset.testid = 'meeting-stop';
+  stopButton.textContent = 'Berhenti & proses';
+  stopButton.disabled = true;
+
+  const transcriptEl = document.createElement('div');
+  transcriptEl.dataset.testid = 'meeting-transcript';
+
+  const outputEl = document.createElement('div');
+  outputEl.dataset.testid = 'meeting-output';
+
+  const status = document.createElement('p');
+  status.dataset.testid = 'meeting-status';
+  status.setAttribute('role', 'status');
+
+  const error = document.createElement('p');
+  error.dataset.testid = 'meeting-error';
+  error.hidden = true;
+  error.setAttribute('role', 'alert');
+
+  let recording = null; // { stream, unsubscribe, stop } selama sesi merekam
+  let busy = false; // true selama capture/preview berjalan (anti double-click)
+
+  /** Sync button state with the recording/busy flags — the only place they change. */
+  const render = () => {
+    startButton.disabled = busy || recording !== null;
+    stopButton.disabled = busy || recording === null;
+  };
+
+  /** Surface a visible, non-PII error line and clear the status line. */
+  const showError = (err, fallback) => {
+    error.textContent = err?.message || fallback;
+    error.hidden = false;
+    status.textContent = '';
+  };
+
+  /** Stop capture and run one round: chunk → /api/transcribe → render → context-aware /api/chat → render. */
+  const finishRound = async (note) => {
+    if (!recording || busy) return;
+    const round = recording;
+    recording = null;
+    busy = true;
+    round.unsubscribe?.();
+    stopStream(round.stream);
+    error.hidden = true;
+    status.textContent = 'Men-transkrip audio...';
+    render();
+    try {
+      const chunks = await round.stop();
+      const size = chunks.reduce((sum, chunk) => sum + (chunk?.size ?? 0), 0);
+      if (chunks.length === 0 || size === 0) {
+        throw new ProvidersError('Tidak ada audio yang terekam — coba mulai lagi', {
+          code: 'VALIDATION',
+          endpoint: '/api/transcribe',
+        });
+      }
+      const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
+      const { text: transcriptText } = await transcribe(blob, { fetchFn, ...chatOptions });
+      transcriptEl.textContent = transcriptText; // transkrip tampil sebelum draft diminta
+      status.textContent = note ? `${note} — menyusun respons...` : 'Menyusun respons...';
+      const reply = await draftFromTranscript(transcriptText, { fetchFn, storage, ...chatOptions });
+      outputEl.textContent = reply.text;
+      status.textContent = note ? `${note} — draft dari ${reply.provider}` : `Draft dari ${reply.provider}`;
+    } catch (err) {
+      showError(err, 'Gagal memproses audio meeting');
+    } finally {
+      busy = false;
+      render();
+    }
+  };
+
+  startButton.addEventListener('click', async () => {
+    if (startButton.disabled) return;
+    busy = true;
+    error.hidden = true;
+    status.textContent = 'Membagikan audio meeting...';
+    render();
+    let stream = null;
+    try {
+      stream = await startDisplayCapture();
+      const { stop } = startChunkedRecording(stream);
+      // share dihentikan lewat UI browser → proses audio yang sudah terekam
+      const unsubscribe = watchTrackEnded(stream, () => {
+        void finishRound('Sesi share berakhir');
+      });
+      recording = { stream, unsubscribe, stop };
+      status.textContent = 'Merekam — klik "Berhenti & proses" setelah percakapan selesai';
+    } catch (err) {
+      if (stream && !recording) stopStream(stream); // jangan biarkan stream bocor
+      showError(err, 'Gagal memulai capture audio');
+    } finally {
+      busy = false;
+      render();
+    }
+  });
+
+  stopButton.addEventListener('click', () => {
+    void finishRound();
+  });
+
+  panel.append(startButton, stopButton, transcriptEl, outputEl, status, error);
+  root.replaceChildren(panel);
+  render();
+  return {
+    destroy() {
+      if (recording) {
+        recording.unsubscribe?.();
+        stopStream(recording.stream);
+        recording = null;
+      }
+      root.replaceChildren();
+    },
+  };
+}
+
+/**
+ * Browser bootstrap: mount the token-access, context-upload, Steer AI,
+ * interview-practice, and client-meeting pipeline panels into the app root
+ * (defaults to #app). Called once by index.html's module entry.
  */
 export function initApp(root = document.getElementById('app'), options = {}) {
   if (!root) throw new Error('initApp: root element #app not found');
@@ -614,13 +814,18 @@ export function initApp(root = document.getElementById('app'), options = {}) {
   const contextRoot = document.createElement('div');
   const steerRoot = document.createElement('div');
   const practiceRoot = document.createElement('div');
-  root.replaceChildren(authRoot, contextRoot, steerRoot, practiceRoot);
-  mountAuthPanel(authRoot);
-  mountContextPanel(contextRoot, options);
-  mountSteerPanel(steerRoot, options);
-  mountPracticePanel(practiceRoot, options);
+  const meetingRoot = document.createElement('div');
+  root.replaceChildren(authRoot, contextRoot, steerRoot, practiceRoot, meetingRoot);
+  const handles = [
+    mountAuthPanel(authRoot),
+    mountContextPanel(contextRoot, options),
+    mountSteerPanel(steerRoot, options),
+    mountPracticePanel(practiceRoot, options),
+    mountMeetingPanel(meetingRoot, options),
+  ];
   return {
     destroy() {
+      for (const handle of handles) handle?.destroy?.(); // rilis resource tiap panel (mis. stream recording)
       root.replaceChildren();
     },
   };

@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.7
-changelog_version: 1.0.14
+changelog_version: 1.0.15
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,22 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #012 — Audio → Transcript → Response Pipeline Wiring
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Wire `audio-capture.js` → `providers.js` (`/api/transcribe`) → context-aware `/api/chat` call → UI display, implementing the client-meeting data flow from @knowledge §3.
-- **Files to create / modify:** `public/app.js`
-- **Acceptance criteria:**
-  - [ ] Audio from the shared system-audio stream results in a transcript rendered in the UI
-  - [ ] The AI-drafted response reflects the currently active mode's persona/context
-  - [ ] Unit test written and passing for new logic (orchestration logic tested with capture/network mocked)
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #007, Task #008, Task #009, Task #010
-- **Decisions made:** _(fill after execution — never leave blank)_
-
-## [NEXT TASKS]
-
-### Phase 4 — Integration
 
 #### Task #013 — Outbound Timeouts for All Provider Calls
 - **Phase:** Phase 4 — Integration
@@ -38,6 +22,10 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #005
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+## [NEXT TASKS]
+
+### Phase 4 — Integration
 
 #### Task #014 — Verify Fallback Handles Provider-Specific 429s
 - **Phase:** Phase 4 — Integration
@@ -495,3 +483,35 @@ simple_mode: true
   - [TEST] Mutation verification, one per gate layer: (A) removed the phase guard in `requestPracticeFeedback` → exactly 1 test failed; (B) widened `FEEDBACK_RECEIVED` acceptance to non-idle → 5 tests failed (state machine + panel); (C) forced `feedback.hidden = false` → exactly 2 panel tests failed; each reverted individually, 93/93 green after restore
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Deviation: `test/frontend/interview-practice.test.js` is outside the task's `Files to create / modify` list — required by the acceptance criterion "Unit test written and passing" (same precedent as #009/#010, which also created tests beyond their listed files). Pre-existing observations stand: ESLint absent (#003); `public/index.html`/`public/styles.css` still missing, so no browser can render this panel yet — belongs to #016's E2E scope (#007/#010B/#010C). Forward impact: `public/app.js` also modified by #012, #015 (tracked, intentional).
 - **Knowledge drift:** none — no new library (§2), kebab-case file + camelCase functions + one-line docstrings on every export per §4, no new top-level folder (§3 `public/app.js` already documented), `/api/chat` shape unchanged (§5), domain rules implemented verbatim as §7 already states them, no infra change (§8), test isolation per §4.
+
+### Task #012 — Audio → Transcript → Response Pipeline Wiring ✅
+- **Completed:** 2026-09-28
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-012-pipeline-wiring
+- **Files created / modified:**
+  - `public/app.js` — **modified**: new imports from `audio-capture.js` + `transcribe` from `providers.js`; `clampContextField()` extracted (shared by practice + meeting context builders); meeting-pipeline section — `MEETING_SYSTEM_PROMPT` (client-meeting persona, grounded only in transcript + saved context), `buildMeetingContext()` (cv/jd/productKnowledge clamped to `MAX_CONTEXT_CHARS`), `buildTranscriptMessages()` (§3: system = persona+context, user = transcript), `draftFromTranscript()` (reads saved context at call time; VALIDATION reject + zero network on empty transcript), `mountMeetingPanel()` (share system audio → chunked recording → `/api/transcribe` → transcript rendered → context-aware `/api/chat` → draft rendered; track-`ended` auto-process; empty-recording guard; stream released on finish/error/destroy); `initApp` mounts a 5th panel and its `destroy()` now calls every panel handle's `destroy()`
+  - `test/frontend/meeting-pipeline.test.js` — **created**: 12 tests — message assembly (persona + clamped context + transcript as user message, missing-value tolerance, empty-transcript VALIDATION with 0 network calls, context re-read at call time), panel end-to-end with capture+network mocked (call order `['/api/transcribe','/api/chat']`, transcript then draft rendered, streams stopped), NO_AUDIO_TRACK error with 0 calls + no leaked stream, zero-chunk recording error with 0 calls, failed draft keeps transcript + surfaces 503, failed transcribe never requests a draft, track-`ended` auto-processing (double-stop adds no request), `destroy()` while recording releases stream, `initApp` 5-panel mount
+- **Acceptance criteria met:**
+  - [x] Audio from the shared system-audio stream results in a transcript rendered in the UI — test drives the real wiring with stubbed `getDisplayMedia`/`MediaRecorder`: start share → record → stop → `meeting-transcript` shows `transkrip lawan bicara`; request order asserted `['/api/transcribe', '/api/chat']`
+  - [x] The AI-drafted response reflects the currently active mode's persona/context — draft request's `messages[0]` carries `MEETING_SYSTEM_PROMPT` + the context saved in localStorage (seeded in test); a second call after changing the stored context carries the NEW context and not the old one ("current" proven), with each field clamped to Task #008's cap
+  - [x] Unit test written and passing for new logic (12 tests; orchestration driven with capture mocked via `navigator.mediaDevices`/`MediaRecorder` stubs and network mocked via injected `fetchFn`)
+  - [x] Test is isolated: sets up and tears down its own state — fresh `root` per test, `localStorage.clear()` in both hooks, `navigator.mediaDevices` + `globalThis.MediaRecorder` descriptors restored in `afterEach`, per-test `fetchFn` closure
+- **Security gate:** STANDARD — all checks passed (Phase 3 tier; HIGH-RISK OVERRIDE not triggered — no auth/session/credential/token code touched) [— simple_mode: 0 items skipped; security baseline is never skipped]
+  - BASIC: [x] no secrets hardcoded · [x] sensitive config from env/secure config only (Bearer flow untouched) · [x] no eval()/exec() with external input (grep: no `eval`/`new Function`/`innerHTML`/`console.*` in `app.js`) · [x] error messages expose no stack traces/internal paths (only `ProvidersError`/`AudioCaptureError` messages) · [x] CORS whitelist — N/A, no CORS code, same-origin per §9 · [x] `.gitignore` has `.env`, `*.pem`, `*.key`, `*.p12` · [x] pre-commit hook active — re-verified this task (throwaway `verify-hook.pem` staged with `-f` → `COMMIT DITOLAK`, no commit created; `.dev.vars` untouched per §9) · [x] CI/CD secret masking — N/A, no pipeline (§8) · [x] Dockerfile ARG secret — N/A, no container orchestration (§2)
+  - STANDARD: [x] external input validated/sanitized — non-empty transcript rejected pre-network, zero-byte/zero-chunk recording rejected before upload, context fields typeof-checked + clamped · [x] no catastrophic-backtracking regexes (no runtime regex added; test-side literals match fixed strings) · [x] request body size limits — context capped 5,000 chars/field before payload (§7); audio bounded by the user's own session · [x] auth on protected routes — `/api/*` still Worker-guarded; calls go through `providers.js` which attaches the Bearer token · [x] authorization at service layer — N/A (single user, no resource IDs) · [x] parameterized queries — N/A (no DB, §2) · [x] file paths from user input — N/A · [x] PII not in logs — zero `console.*` added (#004 guardrail green) · [x] log injection — N/A, no logging · [x] HTML output escaped — transcript/draft/status rendered via `textContent` only · [x] redirect allowlist — N/A (no redirects) · [x] brute force — unchanged KV lockout · [x] password reset tokens — N/A · [x] session regeneration after login — N/A (per-request Bearer) · [x] Set-Cookie — no cookies · [x] mobile/desktop secure storage — web shape; token storage unchanged · [x] HTTP method override — none enabled · [x] Content-Type validated before body — server-side, unchanged (pre-existing #003 observation) · [x] API schema additive-only — no server/API change (frontend only)
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped (no skippable items in BASIC/STANDARD for this shape)]
+  - BASIC: [x] no sync blocking in async handlers (all three stages awaited; buttons disabled while in flight) · [x] no hardcoded pool sizes/timeouts/batch limits — request timeouts stay configurable in `providers.js` (60s chat / 120s transcribe), recorder timeslice configurable in `audio-capture.js` · [x] DB pool — N/A (no DB) · [x] external I/O explicit timeouts — inherited `AbortSignal.timeout` from `providers.js` · [x] no global mutable state — recording/busy state lives in the panel closure; module exports remain pure functions/consts · [x] correlation ID — N/A per §8 minimal-observability decision · [x] structured logger/crash reporter — N/A per §8 explicit decision
+  - STANDARD: [x] query plan check — N/A (no DB) · [x] no N+1 — exactly 1 transcribe + 1 chat request per round · [x] list pagination — N/A (no list endpoints) · [x] all I/O async/non-blocking · [x] no unbounded memory accumulation — chunk buffer is session-scoped and released after each round; `destroy()` unsubscribes + stops the stream; transcript/draft overwrite per round · [x] soft-delete — N/A (no stored entities) · [x] multi-table writes in transaction — N/A (no DB) · [x] non-blocking migrations — N/A (no DB) · [x] GraphQL limits — N/A
+- **Observability gate:** N/A — Phase 7 only
+- **Regression:** Passed 105 (93 baseline + 12 new), 0 failed (`npm test` → `vitest run`, 11 files, 3.87s final run after mutation restore); `node --check` OK on both changed files (ESLint still absent — pre-existing, #003); mutation verification: 3 rounds (see Decisions)
+- **Decisions made:**
+  - [ARCH] Interpretation of "currently active mode's persona/context": considered (1) a global mode switcher across panels, (2) a mode registry inside the pipeline, (3) this pipeline IS the client-meeting mode and reads its context live from storage at call time — picked (3): @knowledge §3 defines exactly one client-meeting data flow ("system: persona/CV/JD, user: transcript") and no mode-switch state, and §7 forbids a live-drafting interview mode (a switcher would be dead config or a domain-rule hazard)
+  - [PATTERN] Extracted shared `clampContextField()` because two real call sites now exist (Task #011's `buildPracticeContext` + this task's `buildMeetingContext`) instead of duplicating the cap logic; #011's behavior unchanged — its 16 tests pass unmodified
+  - [ARCH] Track `ended` (user stops sharing via the browser UI) runs the same `finishRound()` as the Stop button — one processing code path, recorded audio is never dropped; satisfies PRD §5's "capture stopped → inform + offer restart" intent while keeping the flow linear
+  - [PATTERN] Transcript is rendered BEFORE the draft request inside the same try/catch, so a chat failure still leaves the transcript visible (tested) — matches §3's flow ordering and makes partial success observable instead of all-or-nothing
+  - [ARCH] `initApp.destroy()` now invokes every panel handle's `destroy()` (previously it only detached children) — the meeting panel owns a live `MediaStream`; detaching the DOM without releasing it would leave the browser's share indicator on. All pre-existing `initApp` tests pass unmodified
+  - [TEST] Capture mocked by stubbing `navigator.mediaDevices` + `globalThis.MediaRecorder` (descriptor restore, pattern from #007) rather than injecting a capture port — exercises the real `audio-capture.js` wiring end-to-end; network mocked via injected `fetchFn` per #009
+  - [TEST] Mutation verification, one per acceptance criterion: (A) `draftFromTranscript` drops saved context → exactly 2 failed (context-at-call-time + panel); (B) removed transcript rendering → exactly 2 failed (happy path + failed-draft-keeps-transcript); (C) removed the zero-chunk guard → exactly 1 failed; each reverted individually, 105/105 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Deviation: `test/frontend/meeting-pipeline.test.js` is outside the task's file list — required by the acceptance criterion "Unit test written and passing" (same precedent as #009/#010/#011). Deliberately out of scope: PRD §5's separate mic-capture button (acceptance #1 covers only the shared system-audio stream) — flag for the developer if two-sided capture is wanted. Pre-existing observations stand: ESLint absent (#003); `public/index.html`/`public/styles.css` missing → no browser renders this panel yet (#016). Forward impact: `public/app.js` also modified by #015 (tracked, intentional).
+- **Knowledge drift:** none — no new library (§2, only in-repo `audio-capture.js`/`providers.js` imports), naming + one-line docstrings per §4, implements §3's documented data flow as written, `/api/transcribe` + `/api/chat` shapes per §5 unchanged, error handling via existing `ProvidersError` per §4, no infra change (§8), no delete strategy (§7), test isolation per §4.
