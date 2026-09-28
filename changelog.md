@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
 knowledge_version: 1.0.7
-changelog_version: 1.0.13
+changelog_version: 1.0.14
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -10,22 +10,6 @@ simple_mode: true
 ---
 
 ## [IN PROGRESS]
-
-#### Task #011 — Feature: Interview-Practice Mode
-- **Phase:** Phase 3 — Core Features
-- **Scope:** Implement the practice flow from @knowledge §7: AI asks one question derived from CV+JD, user answers, and feedback is shown only after the user explicitly marks the answer complete — never while answering.
-- **Files to create / modify:** `public/app.js`
-- **Acceptance criteria:**
-  - [ ] No feedback UI is rendered, and no feedback-requesting `/api/chat` call is made, before the user marks the current answer complete
-  - [ ] Feedback generation uses the CV/JD context assembled per Task #008's character limit
-  - [ ] Unit test written and passing for new logic (the state-machine rule "no feedback before mark-complete" tested directly)
-  - [ ] Test is isolated: sets up and tears down its own state
-- **Dependencies:** Task #008, Task #009
-- **Decisions made:** _(fill after execution — never leave blank)_
-
-## [NEXT TASKS]
-
-### Phase 3 — Core Features
 
 #### Task #012 — Audio → Transcript → Response Pipeline Wiring
 - **Phase:** Phase 3 — Core Features
@@ -38,6 +22,8 @@ simple_mode: true
   - [ ] Test is isolated: sets up and tears down its own state
 - **Dependencies:** Task #007, Task #008, Task #009, Task #010
 - **Decisions made:** _(fill after execution — never leave blank)_
+
+## [NEXT TASKS]
 
 ### Phase 4 — Integration
 
@@ -477,3 +463,35 @@ simple_mode: true
   - [TEST] README deliberately includes the known `public/index.html` gap (row "Halaman tidak termuat (404)" → points at Task #016) so the FAQ also pre-empts the "why won't the page open" question that is adjacent to login
 - **Notes:** No git remote — `git pull/push origin dev` N/A; merge local to `dev`. Anchor link `#login--autentikasi` verified against GitHub's slug rule (space → `-`, `&` dropped). `styles.css`/`index.html` are referenced only as *missing* (per #007 observation), never as existing files.
 - **Knowledge drift:** none — README is not part of @knowledge §3's tree; no library (§2), naming (§4), API contract (§5), domain rule (§7), or infra (§8) change.
+
+### Task #011 — Feature: Interview-Practice Mode ✅
+- **Completed:** 2026-09-28
+- **Phase:** Phase 3 — Core Features
+- **Status:** OK
+- **Branch:** feat/task-011-interview-practice-mode
+- **Files created / modified:**
+  - `public/app.js` — **modified**: `PRACTICE_PHASE` + `createPracticeSession()` + `applyPracticeEvent()` (4-phase state machine — `idle → answering → feedback-pending → feedback`; illegal events return the same object reference); `buildPracticeContext()` (CV/JD clamped field-by-field to Task #008's `MAX_CONTEXT_CHARS`); `PRACTICE_QUESTION_SYSTEM_PROMPT` / `PRACTICE_FEEDBACK_SYSTEM_PROMPT` (interviewer + coach only, never a verbatim answer per §7); `buildQuestionMessages()` / `buildFeedbackMessages()`; `requestPracticeQuestion()` / `requestPracticeFeedback()` (async VALIDATION reject + zero network unless marked complete); `mountPracticePanel()` (question → typed answer → explicit "Tandai selesai" → feedback area that stays `hidden` until then; textContent-only rendering); `initApp` now mounts 4 panels with the same composite `destroy()`
+  - `test/frontend/interview-practice.test.js` — **created**: 16 tests — state-machine gate (direct: `FEEDBACK_RECEIVED` rejected in idle/answering, `ANSWER_MARKED_COMPLETE` rejected on empty answer, legal path accepted), request-gate (`requestPracticeFeedback` VALIDATION + 0 network calls unless marked), CV/JD clamped to `MAX_CONTEXT_CHARS` in prompt payload, prompt forbid-verbatim-answer assertions, panel flow (no feedback fetch/UI before mark — 1 call until mark, then 2), feedback-fetch failure → visible error + hidden feedback + successful retry, literal-markup rendering (no parsed `<script>`/`<img>`), question-error surfacing, `initApp` 4-panel mount + destroy
+- **Acceptance criteria met:**
+  - [x] No feedback UI is rendered, and no feedback-requesting `/api/chat` call is made, before the user marks the current answer complete — enforced 3 ways: state machine (`FEEDBACK_RECEIVED` illegal outside `feedback-pending`, which is only reachable via `ANSWER_MARKED_COMPLETE`), request layer (`requestPracticeFeedback` rejects VALIDATION with zero network calls), and panel (`feedback.hidden` flips only in the post-mark render); test asserts `fetchFn.calls === 1` (question only) and `feedback.hidden === true` right up to the mark click, `=== 2` after
+  - [x] Feedback generation uses the CV/JD context assembled per Task #008's character limit — `buildPracticeContext()` clamps each field to `MAX_CONTEXT_CHARS` at prompt-assembly time (tested: over-cap CV/JD → exactly 5,000 chars reach the payload; `loadContext` values feed it)
+  - [x] Unit test written and passing for new logic (16 tests; the "no feedback before mark-complete" state-machine rule tested directly, not only through the DOM)
+  - [x] Test is isolated: sets up and tears down its own state — fresh `root` per test, `localStorage.clear()` in both hooks, per-test `fetchFn` closure (no global fetch mutation), sessions created inside each test
+- **Security gate:** STANDARD — all checks passed (Phase 3 tier; HIGH-RISK OVERRIDE not triggered — no auth/session/credential/token code touched) [— simple_mode: 0 items skipped; security baseline is never skipped]
+  - BASIC: [x] no secrets hardcoded · [x] sensitive config from env/secure config only (unchanged Bearer flow) · [x] no eval()/exec() with external input (grep-verified: no `eval`/`new Function`/`innerHTML` in `app.js`) · [x] error messages expose no stack traces/internal paths (surfaced messages come from `ProvidersError`, status-based) · [x] CORS whitelist — N/A, no CORS code added, same-origin per §9 · [x] `.gitignore` has `.env`, `*.pem`, `*.key`, `*.p12` · [x] pre-commit hook active — Phase 2+ re-verified this task (throwaway `verify-hook.pem` staged with `-f` → `COMMIT DITOLAK`, no commit created; `.dev.vars` untouched per §9) · [x] CI/CD secret masking — N/A, no pipeline (§8) · [x] Dockerfile ARG secret — N/A, no container orchestration (§2)
+  - STANDARD: [x] external input validated/sanitized (question non-empty + typeof guard, answer/event types guarded, context clamped) · [x] no catastrophic-backtracking regexes (no regex in new runtime code; test-side regexes match literal prompt text) · [x] request body size limits — context capped 5,000 chars/field before payload (§7); chat transport cap assessed in #009 · [x] auth on protected routes — `/api/*` still guarded by Worker (untached); panel calls go through `providers.js` which attaches the Bearer token · [x] authorization at service layer — N/A (single user, no resource IDs) · [x] parameterized queries — N/A (no DB, §2) · [x] file paths from user input — N/A (no path handling) · [x] PII not in logs — zero `console.*` added (guardrail test green) · [x] log injection — N/A, no logging · [x] HTML output escaped — all render via `textContent`; test proves `<script>`/`<img onerror>` stay literal text · [x] redirect allowlist — N/A (no redirects) · [x] brute force — unchanged KV lockout (auth code untouched) · [x] password reset tokens — N/A · [x] session regeneration after login — N/A (per-request Bearer) · [x] Set-Cookie — no cookies set · [x] mobile/desktop secure storage — web shape; token storage unchanged & documented §5 · [x] HTTP method override — none enabled · [x] Content-Type validated before body — server-side, unchanged (pre-existing #003 observation, not this diff) · [x] API schema additive-only — no server/API change (frontend only)
+- **Scalability gate:** STANDARD — all checks passed [— simple_mode: 0 items skipped (no skippable items in BASIC/STANDARD for this shape)]
+  - BASIC: [x] no sync blocking in async handlers (chat awaited, buttons disabled while in flight) · [x] no hardcoded pool sizes/timeouts/batch limits — timeouts stay configurable in `providers.js` (60s chat, unchanged) · [x] DB pool — N/A (no DB) · [x] external I/O explicit timeouts — inherited `AbortSignal.timeout` from `chat()` · [x] no global mutable state — session lives in the panel closure; module exports are pure functions/consts (zero module-level mutable state, same discipline as #009) · [x] correlation ID — N/A per §8 minimal-observability decision (frontend, no envelope) · [x] structured logger/crash reporter — N/A per §8 explicit decision
+  - STANDARD: [x] query plan check — N/A (no DB) · [x] no N+1 — exactly 1 request per question, 1 per feedback round · [x] list pagination — N/A (no list endpoints) · [x] all I/O async · [x] no unbounded memory accumulation — one question/answer/feedback string per session; panel removed on `destroy()` · [x] soft-delete — N/A (no stored entities) · [x] multi-table writes in transaction — N/A (no DB) · [x] non-blocking migrations — N/A (no DB) · [x] GraphQL limits — N/A
+- **Observability gate:** N/A — Phase 7 only
+- **Regression:** Passed 93 (77 baseline + 16 new), 0 failed (`npm test` → `vitest run`, 10 files, 5.11s); `node --check` OK on both changed files (ESLint still absent from repo — pre-existing, recorded in #003); mutation verification: 3 rounds (see Decisions)
+- **Decisions made:**
+  - [ARCH] Feedback gated by an explicit 4-phase state machine instead of a boolean flag: `FEEDBACK_RECEIVED` is only legal in `feedback-pending`, and that phase is only reachable through `ANSWER_MARKED_COMPLETE` — the §7 rule becomes structural rather than a UI convention; rejected events return the **same object reference**, so callers (and tests) detect a blocked transition by identity
+  - [SEC] The gate is re-checked at the request layer too (`requestPracticeFeedback` async-rejects `VALIDATION` with zero network calls outside `feedback-pending`) — defense in depth so a future caller mounting the same helpers cannot bypass the panel's rule
+  - [ARCH] CV/JD clamped field-by-field inside `buildPracticeContext()` at prompt-assembly time instead of trusting `loadContext()` — localStorage may hold a value written before a cap change; clamping at the last hop guarantees §7's 5,000-char limit holds for every prompt
+  - [PATTERN] Feedback-fetch failure keeps `feedback-pending` (answer already `readOnly`, mark button re-enabled for retry) rather than reverting to `answering` — the user's mark is not undone by a network error; retry covered by a dedicated test (3rd call succeeds → feedback renders)
+  - [ARCH] `initApp` mounts the practice panel as a 4th wrapper root with options passed through unchanged (`storage`/`fetchFn` reach every panel; `mountAuthPanel` ignores the extra arg) — verified beforehand that no existing `initApp` test counts children (they assert presence per panel), so #008/#010/#010B tests pass unmodified
+  - [TEST] New test file placed in the Node-side jsdom project (not `worker.js`) — the state machine and panel are browser modules; matches #007–#010B test placement, per-test `fetchFn` closure reused from #009 so no global fetch mutation
+  - [TEST] Mutation verification, one per gate layer: (A) removed the phase guard in `requestPracticeFeedback` → exactly 1 test failed; (B) widened `FEEDBACK_RECEIVED` acceptance to non-idle → 5 tests failed (state machine + panel); (C) forced `feedback.hidden = false` → exactly 2 panel tests failed; each reverted individually, 93/93 green after restore
+- **Notes:** No git remote — `git pull/push origin dev` N/A; merge is local to `dev`. Deviation: `test/frontend/interview-practice.test.js` is outside the task's `Files to create / modify` list — required by the acceptance criterion "Unit test written and passing" (same precedent as #009/#010, which also created tests beyond their listed files). Pre-existing observations stand: ESLint absent (#003); `public/index.html`/`public/styles.css` still missing, so no browser can render this panel yet — belongs to #016's E2E scope (#007/#010B/#010C). Forward impact: `public/app.js` also modified by #012, #015 (tracked, intentional).
+- **Knowledge drift:** none — no new library (§2), kebab-case file + camelCase functions + one-line docstrings on every export per §4, no new top-level folder (§3 `public/app.js` already documented), `/api/chat` shape unchanged (§5), domain rules implemented verbatim as §7 already states them, no infra change (§8), test isolation per §4.
