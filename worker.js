@@ -8,6 +8,13 @@
  *   POST /api/chat        -> LLM, fallback: OpenRouter > Groq > Mistral > SambaNova
  *   POST /api/transcribe  -> STT via Groq Whisper (satu-satunya yang gratis di daftar ini)
  *
+ * Semua panggilan upstream dibatasi timeout eksplisit (CHAT_TIMEOUT_MS
+ * default 15000, TRANSCRIBE_TIMEOUT_MS default 30000) — provider yang
+ * hang di-abort dan dihitung gagal supaya rantai fallback lanjut, bukan
+ * menggantung sampai WAF edge memutus. Setiap respons (termasuk statis
+ * & error) dibungkus header keamanan: HSTS, X-Frame-Options,
+ * X-Content-Type-Options, CSP tanpa unsafe-inline/eval.
+ *
  * Auth: Bearer token toggle via AUTH_ENABLED (client kirim
  * `Authorization: Bearer <BASIC_AUTH_TOKEN>`), plus lockout sederhana
  * (maks. 3 percobaan gagal per IP, reset otomatis setelah 15 menit lewat
@@ -86,6 +93,53 @@ const FALLBACK_ORDER = ['openrouter', 'groq', 'mistral', 'sambanova'];
 
 const MAX_AUTH_FAILURES = 3;
 const LOCKOUT_TTL_SECONDS = 900; // 15 menit — auto-reset via KV TTL kalau tidak ada percobaan baru
+
+const CHAT_TIMEOUT_MS = 15_000;
+const TRANSCRIBE_TIMEOUT_MS = 30_000;
+
+/**
+ * Ambil nilai timeout dari env (bisa dioverride per deploy / per test),
+ * dengan fallback ke default. Nilai non-positif atau non-angka diabaikan
+ * supaya config rusak tidak mematikan timeout sama sekali.
+ */
+function envTimeoutMs(env, name, fallback) {
+  const raw = Number(env?.[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+/**
+ * Error internal untuk membedakan timeout dari error jaringan lain:
+ * rantai fallback hanya boleh "lanjut ke provider berikutnya" untuk
+ * timeout (ProviderTimeoutError); error lain tetap melesat ke atas
+ * seperti perilaku lama (500 fail-fast).
+ */
+class ProviderTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`provider tidak merespons dalam ${timeoutMs}ms`);
+    this.name = 'ProviderTimeoutError';
+    this.code = 'PROVIDER_TIMEOUT';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
+ * fetch() dengan batas waktu: AbortController + setTimeout, timer selalu
+ * di-clear di finally supaya tidak bocor. Abort dari fetch (bukan dari
+ * kita) dilempar ulang apa adanya — hanya timeout sendiri yang dipetakan
+ * ke ProviderTimeoutError.
+ */
+async function fetchWithTimeout(url, init, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (controller.signal.aborted) throw new ProviderTimeoutError(timeoutMs);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function authRequired(env) {
   return env.AUTH_ENABLED === 'true';
@@ -184,11 +238,18 @@ function unauthorized(locked) {
   });
 }
 
+/**
+ * Panggil satu provider OpenAI-compatible. Mengembalikan null kalau API
+ * key belum di-set (skip diam-diam), { id, res } kalau ada respons.
+ * Timeout diatur CHAT_TIMEOUT_MS — hang dipetakan ke ProviderTimeoutError.
+ */
 async function callProvider(id, cfg, env, body) {
   const apiKey = env[cfg.apiKeyEnv];
   if (!apiKey) return null; // provider ini belum di-set, skip diam-diam
 
-  const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+  const res = await fetchWithTimeout(
+    `${cfg.baseUrl}/chat/completions`,
+    {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -210,7 +271,9 @@ async function callProvider(id, cfg, env, body) {
       // sudah settle ke satu provider utama.
       stream: false,
     }),
-  });
+    },
+    envTimeoutMs(env, 'CHAT_TIMEOUT_MS', CHAT_TIMEOUT_MS),
+  );
 
   return { id, res };
 }
@@ -225,10 +288,22 @@ async function handleChat(request, env) {
   const order = body.provider ? [body.provider] : FALLBACK_ORDER;
 
   let lastResult = null;
+  let timedOut = false; // minimal satu panggilan melebihi CHAT_TIMEOUT_MS
   for (const id of order) {
     const cfg = PROVIDERS[id];
     if (!cfg) continue;
-    const result = await callProvider(id, cfg, env, body);
+    let result;
+    try {
+      result = await callProvider(id, cfg, env, body);
+    } catch (err) {
+      // Hanya timeout yang dianggap "provider X gagal, lanjut berikutnya";
+      // error jaringan lain tetap dilempar (perilaku lama: 500 fail-fast).
+      if (err instanceof ProviderTimeoutError) {
+        timedOut = true;
+        continue;
+      }
+      throw err;
+    }
     if (!result) continue; // key belum di-set untuk provider ini
     lastResult = result;
     if (result.res.ok) {
@@ -239,12 +314,22 @@ async function handleChat(request, env) {
   }
 
   if (!lastResult) {
+    // Tidak ada respons sama sekali: kalau ada yang timeout -> 504
+    // (beda diagnosis dari "tidak ada key" yang tetap 500).
+    if (timedOut) {
+      const timeoutMs = envTimeoutMs(env, 'CHAT_TIMEOUT_MS', CHAT_TIMEOUT_MS);
+      return new Response(`Semua provider LLM melebihi timeout ${timeoutMs}ms`, {
+        status: 504,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      });
+    }
     return new Response(
       'Tidak ada provider dengan API key ter-set di environment',
       { status: 500 },
     );
   }
-  // Semua provider di rantai fallback gagal — kembalikan error asli terakhir
+  // Ada respons nyata terakhir — kembalikan error asli provider itu apa
+  // adanya (timeout provider lain tidak menimpa status asli yang valid).
   return new Response(lastResult.res.body, {
     status: lastResult.res.status,
     headers: {
@@ -273,11 +358,27 @@ async function handleTranscribe(request, env) {
   forward.append('language', incoming.get('language') || 'id');
   forward.append('response_format', 'json');
 
-  const upstream = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
-    body: forward,
-  });
+  let upstream;
+  try {
+    upstream = await fetchWithTimeout(
+      'https://api.groq.com/openai/v1/audio/transcriptions',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
+        body: forward,
+      },
+      envTimeoutMs(env, 'TRANSCRIBE_TIMEOUT_MS', TRANSCRIBE_TIMEOUT_MS),
+    );
+  } catch (err) {
+    if (err instanceof ProviderTimeoutError) {
+      const timeoutMs = envTimeoutMs(env, 'TRANSCRIBE_TIMEOUT_MS', TRANSCRIBE_TIMEOUT_MS);
+      return new Response(`Groq Whisper melebihi timeout ${timeoutMs}ms`, {
+        status: 504,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      });
+    }
+    throw err;
+  }
 
   return new Response(upstream.body, {
     status: upstream.status,
@@ -287,36 +388,72 @@ async function handleTranscribe(request, env) {
   });
 }
 
+/**
+ * Bungkus SETIAP respons dengan header keamanan (Phase-4 FULL gate):
+ * HSTS, X-Frame-Options SAMEORIGIN, X-Content-Type-Options, dan CSP
+ * tanpa 'unsafe-inline'/'unsafe-eval'. Header asli disalin dulu supaya
+ * Content-Type / Retry-After / WWW-Authenticate tidak hilang; status
+ * tanpa-body (204/304) tetap tanpa body.
+ */
+function withSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  headers.set('X-Frame-Options', 'SAMEORIGIN');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set(
+    'Content-Security-Policy',
+    "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; " +
+      "object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+      "connect-src 'self'",
+  );
+  const body = [101, 204, 205, 304].includes(response.status) ? null : response.body;
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/**
+ * Router inti: fail-fast konfigurasi -> auth /api/* -> handler API ->
+ * fallback statis. Terpisah dari pembungkus header keamanan supaya semua
+ * cabang (termasuk error konfigurasi & 401) otomatis ikut dibungkus.
+ */
+async function routeRequest(request, env) {
+  // Sebelum auth & routing: konfigurasi rusak harus gagal keras (500)
+  // untuk semua request, termasuk frontend statis — bukan 401 diam-diam.
+  const configError = authConfigError(env);
+  if (configError) return configError;
+
+  const url = new URL(request.url);
+
+  // Auth hanya untuk /api/* — lihat komentar header file ini: shell
+  // statis harus tetap termuat saat AUTH_ENABLED=true, karena browser
+  // tidak pernah menempelkan header Authorization ke document request.
+  // Fail-fast konfigurasi di atas TETAP berlaku untuk semua path
+  // (miscofig deployment harus tetap gagal keras, bukan 401 diam-diam).
+  if (url.pathname.startsWith('/api/')) {
+    const auth = await checkAuth(request, env);
+    if (!auth.ok) return unauthorized(auth.locked);
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/chat') {
+    return handleChat(request, env);
+  }
+  if (request.method === 'POST' && url.pathname === '/api/transcribe') {
+    return handleTranscribe(request, env);
+  }
+
+  // Fallback ke frontend statis (index.html, app.js, ...) di ./public
+  return env.ASSETS.fetch(request);
+}
+
 export default {
   async fetch(request, env) {
-    // Sebelum auth & routing: konfigurasi rusak harus gagal keras (500)
-    // untuk semua request, termasuk frontend statis — bukan 401 diam-diam.
-    const configError = authConfigError(env);
-    if (configError) return configError;
-
-    const url = new URL(request.url);
-
-    // Auth hanya untuk /api/* — lihat komentar header file ini: shell
-    // statis harus tetap termuat saat AUTH_ENABLED=true, karena browser
-    // tidak pernah menempelkan header Authorization ke document request.
-    // Fail-fast konfigurasi di atas TETAP berlaku untuk semua path
-    // (miscofig deployment harus tetap gagal keras, bukan 401 diam-diam).
-    if (url.pathname.startsWith('/api/')) {
-      const auth = await checkAuth(request, env);
-      if (!auth.ok) return unauthorized(auth.locked);
-    }
-
-    if (request.method === 'POST' && url.pathname === '/api/chat') {
-      return handleChat(request, env);
-    }
-    if (request.method === 'POST' && url.pathname === '/api/transcribe') {
-      return handleTranscribe(request, env);
-    }
-
-    // Fallback ke frontend statis (index.html, app.js, ...) di ./public
-    return env.ASSETS.fetch(request);
+    return withSecurityHeaders(await routeRequest(request, env));
   },
 };
 
-// Diekspor hanya untuk unit test (fail-fast konfigurasi auth & perbandingan token).
-export { authConfigError, tokensMatch };
+// Diekspor hanya untuk unit test (fail-fast konfigurasi auth, perbandingan
+// token, dan helper timeout outbound Task #013).
+export { authConfigError, tokensMatch, fetchWithTimeout, ProviderTimeoutError, envTimeoutMs };

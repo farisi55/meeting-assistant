@@ -1,8 +1,8 @@
 ---
 project: meeting-assistant
-version: 1.0.7
+version: 1.0.8
 source: prd
-last_updated: 2026-09-26
+last_updated: 2026-09-28
 project_shape: fullstack
 simple_mode: true
 external_assets: false
@@ -154,6 +154,13 @@ external_assets: false
   the missing var — value never included, no `WWW-Authenticate` header —
   before auth, routing, or static serving. This is a
   deployment-misconfiguration diagnostic, not an error envelope
+  Local exception (outbound timeouts): when every keyed provider exceeds
+  its timeout, `POST /api/chat` returns a plain-text 504, and
+  `POST /api/transcribe` returns a plain-text 504 when Groq Whisper
+  exceeds its timeout — no upstream body exists to pass through.
+  Timeouts are env-configurable with defaults `CHAT_TIMEOUT_MS=15000`
+  and `TRANSCRIBE_TIMEOUT_MS=30000`; a hung provider counts as failed so
+  the chat fallback chain advances instead of hanging
 - Pagination: none
 
 ## 6. UI / UX Constraints
