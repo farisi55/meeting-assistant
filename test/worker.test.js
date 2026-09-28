@@ -1,6 +1,12 @@
 import { env, SELF } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import worker, { authConfigError, tokensMatch } from '../worker.js';
+import worker, {
+  authConfigError,
+  tokensMatch,
+  fetchWithTimeout,
+  ProviderTimeoutError,
+  envTimeoutMs,
+} from '../worker.js';
 
 // Nilai dummy (bukan rahasia) yang HARUS cocok dengan binding
 // BASIC_AUTH_TOKEN di vitest.worker.config.js — dipakai jalur lewat SELF.fetch.
@@ -399,5 +405,196 @@ describe('auth scope: API only (Task #010B)', () => {
     await worker.fetch(new Request('https://example.com/', { method: 'GET', headers }), makeEnv());
 
     expect(await env.AUTH_KV.get(LOCK_KEY)).toBeNull(); // tidak ada hitungan auth di luar /api
+  });
+});
+
+describe('outbound timeout & security headers (Task #013)', () => {
+  // Tiap panggilan upstream dibatasi fetchWithTimeout (CHAT_TIMEOUT_MS /
+  // TRANSCRIBE_TIMEOUT_MS). Provider hang harus di-abort, dihitung gagal,
+  // dan rantai fallback lanjut — bukan menggantung. Semua respons juga
+  // wajib membawa header keamanan (HSTS/XFO/XCTO/CSP tanpa unsafe-*).
+  const envWith = (keys) => ({ AUTH_ENABLED: 'false', ...keys });
+
+  let originalFetch;
+  let outboundCalls;
+  let routes;
+
+  // Mock yang menggantung sampai AbortSignal meledak — kalau fetchWithTimeout
+  // tidak mengirim signal, test ini gagal langsung (bukan hang tanpa batas).
+  const hang = (_url, init) =>
+    new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      const abort = () => {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      if (!signal) {
+        reject(new Error('hang tanpa signal — fetchWithTimeout wajib kirim AbortSignal'));
+        return;
+      }
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort);
+    });
+
+  const respond = (status, payload) =>
+    new Response(JSON.stringify(payload), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  const chatRequest = (payload = { messages: [{ role: 'user', content: 'halo' }] }) =>
+    new Request('https://example.com/api/chat', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+  const transcribeRequest = () => {
+    const form = new FormData();
+    form.append('file', new Blob(['dummy-audio'], { type: 'audio/webm' }), 'chunk.webm');
+    return new Request('https://example.com/api/transcribe', { method: 'POST', body: form });
+  };
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    outboundCalls = [];
+    routes = {};
+    globalThis.fetch = async (url, init) => {
+      const u = new URL(url);
+      outboundCalls.push(u.hostname + u.pathname);
+      const handler = routes[u.hostname];
+      if (!handler) throw new Error(`panggilan keluar tak ter-intercept: ${url}`);
+      return handler(url, init);
+    };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('treats a hung provider as failed and falls back to the next one', async () => {
+    routes['openrouter.ai'] = (_url, init) => hang(_url, init);
+    routes['api.groq.com'] = () =>
+      respond(200, { choices: [{ message: { content: 'jawaban groq' } }] });
+
+    const started = Date.now();
+    const res = await worker.fetch(
+      chatRequest(),
+      envWith({ OPENROUTER_API_KEY: 'or-key', GROQ_API_KEY: 'gq-key', CHAT_TIMEOUT_MS: '30' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json())._provider).toBe('groq');
+    expect(outboundCalls).toEqual([
+      'openrouter.ai/api/v1/chat/completions',
+      'api.groq.com/openai/v1/chat/completions',
+    ]);
+    // Bukti tidak menggantung sampai default 15 dtk.
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('returns 504 when every keyed provider hangs without ever responding', async () => {
+    routes['api.groq.com'] = (_url, init) => hang(_url, init);
+
+    const res = await worker.fetch(
+      chatRequest(),
+      envWith({ GROQ_API_KEY: 'gq-key', CHAT_TIMEOUT_MS: '30' }),
+    );
+
+    expect(res.status).toBe(504);
+    expect(await res.text()).toContain('timeout');
+    expect(outboundCalls).toEqual(['api.groq.com/openai/v1/chat/completions']);
+  });
+
+  it('keeps the last real provider error instead of masking it with 504', async () => {
+    // OpenRouter memberi error nyata (500) sebelum Groq hang: respons
+    // asli yang valid harus tetap diteruskan apa adanya.
+    routes['openrouter.ai'] = () => respond(500, { marker: 'or' });
+    routes['api.groq.com'] = (_url, init) => hang(_url, init);
+
+    const res = await worker.fetch(
+      chatRequest(),
+      envWith({ OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2', CHAT_TIMEOUT_MS: '30' }),
+    );
+
+    expect(res.status).toBe(500);
+    expect(await res.text()).toContain('"marker":"or"');
+  });
+
+  it('returns 504 on a hung transcription upstream without hanging the request', async () => {
+    routes['api.groq.com'] = (_url, init) => hang(_url, init);
+
+    const started = Date.now();
+    const res = await worker.fetch(
+      transcribeRequest(),
+      envWith({ GROQ_API_KEY: 'gq-key', TRANSCRIBE_TIMEOUT_MS: '30' }),
+    );
+
+    expect(res.status).toBe(504);
+    expect(await res.text()).toContain('melebihi timeout');
+    expect(outboundCalls).toEqual(['api.groq.com/openai/v1/audio/transcriptions']);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('fetchWithTimeout resolves a fast upstream and signals the request', async () => {
+    let sawSignal = false;
+    globalThis.fetch = async (_url, init) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return respond(200, { ok: true });
+    };
+
+    const res = await fetchWithTimeout('https://fast.example/x', {}, 500);
+
+    expect(res.status).toBe(200);
+    expect(sawSignal).toBe(true);
+  });
+
+  it('fetchWithTimeout aborts a hung upstream and throws ProviderTimeoutError', async () => {
+    globalThis.fetch = (_url, init) => hang(_url, init);
+
+    const err = await fetchWithTimeout('https://hang.example/x', {}, 20).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ProviderTimeoutError);
+    expect(err.code).toBe('PROVIDER_TIMEOUT');
+    expect(err.name).toBe('ProviderTimeoutError');
+  });
+
+  it('envTimeoutMs honours valid overrides and falls back on junk values', async () => {
+    expect(envTimeoutMs({}, 'CHAT_TIMEOUT_MS', 999)).toBe(999);
+    expect(envTimeoutMs({ CHAT_TIMEOUT_MS: '250' }, 'CHAT_TIMEOUT_MS', 999)).toBe(250);
+    expect(envTimeoutMs({ CHAT_TIMEOUT_MS: 'abc' }, 'CHAT_TIMEOUT_MS', 999)).toBe(999);
+    expect(envTimeoutMs({ CHAT_TIMEOUT_MS: '0' }, 'CHAT_TIMEOUT_MS', 999)).toBe(999);
+    expect(envTimeoutMs({ CHAT_TIMEOUT_MS: '-5' }, 'CHAT_TIMEOUT_MS', 999)).toBe(999);
+    expect(envTimeoutMs(undefined, 'CHAT_TIMEOUT_MS', 999)).toBe(999);
+  });
+
+  it('attaches HSTS, X-Frame-Options, X-Content-Type-Options and a strict CSP to static responses', async () => {
+    const assetEnv = {
+      AUTH_ENABLED: 'false',
+      ASSETS: { fetch: async () => new Response('asset-ok') },
+    };
+
+    const res = await worker.fetch(new Request('https://example.com/', { method: 'GET' }), assetEnv);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Strict-Transport-Security')).toContain('max-age=');
+    expect(res.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    const csp = res.headers.get('Content-Security-Policy') || '';
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).not.toContain('unsafe-inline');
+    expect(csp).not.toContain('unsafe-eval');
+  });
+
+  it('attaches the same security headers to API error responses without dropping auth headers', async () => {
+    const res = await worker.fetch(
+      new Request('https://example.com/api/chat', { method: 'POST' }),
+      { AUTH_ENABLED: 'true', BASIC_AUTH_TOKEN: 'token-lokal-sintetis' },
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');
+    expect(res.headers.get('Content-Security-Policy')).toContain("frame-ancestors 'none'");
+    expect(res.headers.get('WWW-Authenticate')).toContain('Bearer'); // header asli tetap ada
   });
 });

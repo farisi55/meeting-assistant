@@ -13,3 +13,8 @@ SAMBANOVA_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 # (atau `uuidgen`), lalu pakai nilai yang sama di localStorage frontend
 # (key: meeting-assistant.auth-token) — lihat README §Konfigurasi.
 BASIC_AUTH_TOKEN=
+
+# Opsional — override batas waktu upstream dalam ms (Task #013).
+# Bawaan: CHAT_TIMEOUT_MS=15000 (chat), TRANSCRIBE_TIMEOUT_MS=30000 (STT).
+# CHAT_TIMEOUT_MS=15000
+# TRANSCRIBE_TIMEOUT_MS=30000
