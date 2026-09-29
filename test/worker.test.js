@@ -6,6 +6,7 @@ import worker, {
   fetchWithTimeout,
   ProviderTimeoutError,
   envTimeoutMs,
+  chatTimeoutDefaultMs,
 } from '../worker.js';
 
 // Nilai dummy (bukan rahasia) yang HARUS cocok dengan binding
@@ -616,7 +617,7 @@ describe('outbound timeout & security headers (Task #013)', () => {
       'openrouter.ai/api/v1/chat/completions',
       'api.mistral.ai/v1/chat/completions',
     ]);
-    // Bukti tidak menggantung sampai default 15 dtk.
+    // Bukti tidak menggantung sampai default 30 dtk.
     expect(Date.now() - started).toBeLessThan(5000);
   });
 
@@ -728,6 +729,10 @@ describe('outbound timeout & security headers (Task #013)', () => {
     expect(envTimeoutMs({ CHAT_TIMEOUT_MS: '0' }, 'CHAT_TIMEOUT_MS', 999)).toBe(999);
     expect(envTimeoutMs({ CHAT_TIMEOUT_MS: '-5' }, 'CHAT_TIMEOUT_MS', 999)).toBe(999);
     expect(envTimeoutMs(undefined, 'CHAT_TIMEOUT_MS', 999)).toBe(999);
+  });
+
+  it('defaults CHAT_TIMEOUT_MS to 30s so the default provider gets time to answer', async () => {
+    expect(chatTimeoutDefaultMs()).toBe(30_000);
   });
 
   it('attaches HSTS, X-Frame-Options, X-Content-Type-Options and a strict CSP to static responses', async () => {

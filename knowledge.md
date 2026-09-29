@@ -1,8 +1,8 @@
 ---
 project: meeting-assistant
-version: 1.0.15
+version: 1.0.16
 source: prd
-last_updated: 2026-09-28
+last_updated: 2026-09-29
 project_shape: fullstack
 simple_mode: true
 external_assets: false
@@ -119,6 +119,12 @@ external_assets: false
 - Coverage target: none formally set (personal-use MVP scale)
 - Docstring/comment requirement: one-line purpose comment on every
   exported function, class, and method
+- Entrypoint exports (`worker.js`): every named export must be a function
+  or ExportedHandler — workerd refuses primitive exports from the main
+  module at boot (`Incorrect type for map entry … not of type 'function
+  or ExportedHandler'`, `wrangler dev` fails to start). When tests need
+  to assert a default value, export a function accessor (e.g.
+  `chatTimeoutDefaultMs()`) instead of the raw constant
 
 ## 5. API & Data Contracts
 - Base URL: `/api/` — no versioning (single internal consumer)
@@ -170,7 +176,7 @@ external_assets: false
   its timeout, `POST /api/chat` returns a plain-text 504, and
   `POST /api/transcribe` returns a plain-text 504 when Groq Whisper
   exceeds its timeout — no upstream body exists to pass through.
-  Timeouts are env-configurable with defaults `CHAT_TIMEOUT_MS=15000`
+  Timeouts are env-configurable with defaults `CHAT_TIMEOUT_MS=30000`
   and `TRANSCRIBE_TIMEOUT_MS=30000`; a hung provider counts as failed so
   the chat fallback chain advances instead of hanging
   Local exception (unusable success body): a 200 response whose body has

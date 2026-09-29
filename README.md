@@ -56,12 +56,15 @@ CORE FEATURES #2; amandemen 2026-09-28 atas #6 yang semula memasukkannya
 ke rantai chat). Kirim `provider: 'groq'` ke `/api/chat` = 500 tanpa
 panggilan keluar, sama seperti provider tak dikenal.
 
-Urutan percobaan saat provider error/limit: `FALLBACK_ORDER` (openrouter →
-mistral). SambaNova sengaja tidak ikut rantai — free tier-nya kini
-menuntut metode pembayaran (402); aktifkan billing lalu kembalikan ke
-`FALLBACK_ORDER` di `worker.js` bila diperlukan. Rantai kini hanya dua
-provider: saat OpenRouter limit/timeout dan Mistral sedang 429, memang
-tidak ada cadangan lagi.
+Urutan percobaan saat provider error/limit: `FALLBACK_ORDER` — **default
+OpenRouter** (elemen pertama, selalu dicoba lebih dulu karena frontend
+tidak pernah mengirim `provider`), lalu Mistral. Batas waktu tiap
+percobaan `CHAT_TIMEOUT_MS` = **30 detik** (naik dari 15 dtk) supaya
+OpenRouter sempat menjawab sebelum jatuh ke Mistral. SambaNova sengaja
+tidak ikut rantai — free tier-nya kini menuntut metode pembayaran (402);
+aktifkan billing lalu kembalikan ke `FALLBACK_ORDER` di `worker.js` bila
+diperlukan. Rantai kini hanya dua provider: saat OpenRouter limit/timeout
+dan Mistral sedang 429, memang tidak ada cadangan lagi.
 
 **Override bila perlu:**
 

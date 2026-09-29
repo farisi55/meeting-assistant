@@ -12,7 +12,7 @@
  *   POST /api/transcribe  -> STT via Groq Whisper (satu-satunya yang gratis di daftar ini)
  *
  * Semua panggilan upstream dibatasi timeout eksplisit (CHAT_TIMEOUT_MS
- * default 15000, TRANSCRIBE_TIMEOUT_MS default 30000) — provider yang
+ * default 30000, TRANSCRIBE_TIMEOUT_MS default 30000) — provider yang
  * hang di-abort dan dihitung gagal supaya rantai fallback lanjut, bukan
  * menggantung sampai WAF edge memutus. Setiap respons (termasuk statis
  * & error) dibungkus header keamanan: HSTS, X-Frame-Options,
@@ -96,6 +96,11 @@ const PROVIDERS = {
 // metode pembayaran (402 PAYMENT_METHOD_REQUIRED) sehingga selalu gagal.
 // PROVIDERS tetap memuatnya supaya `provider: 'sambanova'` masih bisa
 // dipaksa dan rantai bisa dikembalikan setelah billing diaktifkan.
+//
+// Default = elemen pertama: OpenRouter dicoba lebih dulu untuk semua
+// request chat (frontend tidak pernah mengirim field provider). Timeout
+// per percobaan CHAT_TIMEOUT_MS = 30 dtk supaya provider default sempat
+// menjawab sebelum jatuh ke fallback (rantai kini cuma 2 provider).
 const FALLBACK_ORDER = ['openrouter', 'mistral'];
 
 // Nama model & slug provider di atas berubah dari waktu ke waktu —
@@ -104,7 +109,7 @@ const FALLBACK_ORDER = ['openrouter', 'mistral'];
 const MAX_AUTH_FAILURES = 3;
 const LOCKOUT_TTL_SECONDS = 900; // 15 menit — auto-reset via KV TTL kalau tidak ada percobaan baru
 
-const CHAT_TIMEOUT_MS = 15_000;
+const CHAT_TIMEOUT_MS = 30_000;
 const TRANSCRIBE_TIMEOUT_MS = 30_000;
 
 /**
@@ -511,3 +516,8 @@ export default {
 // Diekspor hanya untuk unit test (fail-fast konfigurasi auth, perbandingan
 // token, dan helper timeout outbound Task #013).
 export { authConfigError, tokensMatch, fetchWithTimeout, ProviderTimeoutError, envTimeoutMs };
+// Aksesor fungsi (bukan angka) — workerd menolak export entrypoint berbentuk
+// non-function/ExportedHandler (TypeError "Incorrect type for map entry").
+export function chatTimeoutDefaultMs() {
+  return CHAT_TIMEOUT_MS;
+}

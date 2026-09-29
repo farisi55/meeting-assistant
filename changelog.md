@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
-knowledge_version: 1.0.15
-changelog_version: 1.0.22
+knowledge_version: 1.0.16
+changelog_version: 1.0.23
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -666,3 +666,21 @@ simple_mode: true
 - **Regression:** Passed **135, 0 failed**; tidak ada feature flag.
 - **Notes / risiko diterima:** rantai kini hanya **2 provider** (openrouter → mistral). Mistral 429 (kuota free tier, terverifikasi hari ini) + OpenRouter 50 req/hari & timeout 15 dtk → respons 429 di UI **bisa muncul lagi tanpa penyelamat ketiga**; jalur pengembalian SambaNova setelah billing aktif tidak berubah (`PROVIDERS` tetap memuatnya). Frontend tak pernah mengirim `provider` (hanya test yang memaksa); mock `_provider: 'groq'` di test frontend bersifat agnostik-display — sengaja tidak diubah. `developer-brief.md` tidak diedit (input artefak). Insiden lingkungan saat verifikasi: dua pohon `wrangler dev` berebut port 8787 (satu sesi lama dari `npm run dev`) → dibersihkan jadi 1 instance; angka 500 "tanpa key" awal ternyata payload uji lokal yang sendiri memaksa `provider:'groq'` — perilaku benar, bukan bug.
 - **Knowledge drift:** UPDATE REQUIRED — **diterapkan**: §1/§5/§9 seperti daftar Perubahan; `knowledge_version` 1.0.14 → **1.0.15**. Trigger lain diperiksa: library (§2 — nol paket baru), naming (§4 — nol perubahan), API (§5 — skema response tak berubah; hanya enum input `provider` menyusut, sudah tercatat), infra (§8 — nol), delete strategy (§7 — nol), test isolation (§4 — pola `beforeEach`/`afterEach` lama dipakai ulang). Asset manifest: N/A (`external_assets: false`).
+
+### Ad-hoc — Default OpenRouter + Timeout Chat Naik ke 30 dtk ✅
+- **Date:** 2026-09-29
+- **Status:** OK
+- **Branch:** dev (langsung, 1 commit)
+- **Gejala:** UI meeting kembali `/api/chat merespons 429` (15391ms) tepat setelah Groq dikeluarkan dari chat — rantai 2 provider langsung telanjang.
+- **Diagnosa (probe langsung):** `provider:'mistral'` → **429 persisten** `Rate limit exceeded` (code 1300, 0,3–0,7 dtk, tiga kali berturut); `provider:'openrouter'` → **fluktuatif** (200 dalam 1,7 dtk / hang >15 dtk → timeout, payload kecil pun bisa); API OpenRouter langsung tanpa Worker → 200 dalam 1,5 dtk (layanan hidup). Timing 15391ms = timeout OpenRouter 15.000ms → Mistral 429 cepat → passthrough. **Bukan Groq** — Groq tidak lagi di rantai chat (`/api/transcribe` tetap 200).
+- **Perubahan:**
+  - `worker.js` — `CHAT_TIMEOUT_MS` default **15.000 → 30.000** (OpenRouter lebih punya waktu menjawab sebelum jatuh ke Mistral yang sedang 429); konstanta diekspor lewat aksesor **fungsi** `chatTimeoutDefaultMs()` — percobaan ekspor angka mentah gagal di runtime (`workerd: Incorrect type for map entry 'CHAT_TIMEOUT_MS': … not of type 'function or ExportedHandler'`, `wrangler dev` gagal start; angka bukan ExportedHandler, fungsi lolos); komentar `FALLBACK_ORDER` kini eksplisit: **elemen pertama = provider default (OpenRouter)** — frontend tidak pernah mengirim `provider`, jadi selalu mulai dari sini.
+  - `test/worker.test.js` — **+1 regression test**: `chatTimeoutDefaultMs() === 30_000`; komentar internal "default 15 dtk" → 30 dtk. Test timeout lama tetap override `CHAT_TIMEOUT_MS='30'` (ms) sehingga tidak ada test menunggu 30 dtk.
+  - `knowledge.md` — §5 default timeout `CHAT_TIMEOUT_MS=15000` → `30000`; **1.0.15 → 1.0.16**.
+  - `.dev.vars.example` — komentar bawaan → 30000.
+  - `README.md` — paragraf rantai: default OpenRouter + `CHAT_TIMEOUT_MS` 30 dtk.
+  - `changelog.md` — entri ini; frontmatter `knowledge_version` **1.0.16**, `changelog_version` **1.0.23**.
+- **Verifikasi:** `npm test`: **136 passed, 0 failed, 13 files** (135 + 1). Mutasi ×1 (`30_000` → `15_000`) → test baru gagal → revert → hijau. Live `wrangler dev`: boot normal (setelah fix export) + `/api/chat` payload kecil → **200 `_provider: 'openrouter'` dalam 20,2 dtk** — dengan bawaan lama 15 dtk request ini pasti timeout → jatuh ke Mistral → 429; inilah yang perubahan ini cegah.
+- **Regression:** Passed **136, 0 failed**; tidak ada feature flag.
+- **Notes / batasan:** timeout 30 dtk **menurunkan** peluang 429, tapi tidak menghapusnya — jika OpenRouter hang >30 dtk ATAU sendirinya membalas 429, Mistral (kuota persisten 429) tetap menjadi akhir rantai. Frontend `chat()` memakai abort sendiri `timeoutMs=60000` (`public/providers.js:101`): 2×30 dtk pas di batas itu — kasus terburuk (dua provider hang penuh) berakhir sebagai "timeout/abort" di client, bukan menggantung. Jalan keluar permanen tetap: aktifkan billing SambaNova → kembalikan ke `FALLBACK_ORDER`, atau tambah provider gratis baru.
+- **Knowledge drift:** UPDATE REQUIRED — **diterapkan**: §5 default `CHAT_TIMEOUT_MS` 15000 → 30000; §4 aturan baru entrypoint export (wajib function/ExportedHandler — aksesor fungsi untuk default value); `knowledge_version` 1.0.15 → **1.0.16**. Trigger lain: library (§2 — nol), naming (§4 — nol), API (§5 — hanya nilai default timeout; skema tak berubah), infra (§8 — nol), delete (§7 — nol), test isolation (§4 — nol). Asset manifest: N/A (`external_assets: false`).
