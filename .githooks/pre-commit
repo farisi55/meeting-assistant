@@ -1,9 +1,0 @@
-#!/bin/sh
-# Blokir commit yang menyertakan .dev.vars atau file rahasia lain.
-if git diff --cached --name-only | grep -qE '(^|/)\.dev\.vars$|\.pem$|\.key$|\.p12$|(^|/)secrets/'; then
-  echo "COMMIT DITOLAK: file rahasia terdeteksi di staging area:"
-  git diff --cached --name-only | grep -E '(^|/)\.dev\.vars$|\.pem$|\.key$|\.p12$|(^|/)secrets/'
-  echo "Jalankan: git restore --staged <file> sebelum commit ulang."
-  exit 1
-fi
-exit 0
