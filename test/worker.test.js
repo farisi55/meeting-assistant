@@ -181,41 +181,42 @@ describe('chat provider fallback chain (Task #005, #014)', () => {
 
   it('falls back to the next provider in FALLBACK_ORDER on a non-2xx response', async () => {
     routes['openrouter.ai'] = () => respond(500, { error: { message: 'or down' } });
-    routes['api.groq.com'] = () =>
-      respond(200, { choices: [{ message: { content: 'jawaban groq' } }] });
+    routes['api.mistral.ai'] = () =>
+      respond(200, { choices: [{ message: { content: 'jawaban mistral' } }] });
 
     const res = await worker.fetch(
       chatRequest(),
-      envWith({ OPENROUTER_API_KEY: 'or-key', GROQ_API_KEY: 'gq-key' }),
+      envWith({ OPENROUTER_API_KEY: 'or-key', MISTRAL_API_KEY: 'm-key' }),
     );
 
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data._provider).toBe('groq');
-    expect(data.choices[0].message.content).toBe('jawaban groq');
-    expect(outboundCalls).toEqual(['openrouter.ai', 'api.groq.com']);
+    expect(data._provider).toBe('mistral');
+    expect(data.choices[0].message.content).toBe('jawaban mistral');
+    expect(outboundCalls).toEqual(['openrouter.ai', 'api.mistral.ai']);
   });
 
   it('skips a provider with no API key without throwing and without calling it', async () => {
-    // Hanya GROQ_API_KEY yang di-set: openrouter (urutan pertama) harus
+    // Hanya MISTRAL_API_KEY yang di-set: openrouter (urutan pertama) harus
     // dilewati diam-diam tanpa error dan tanpa panggilan keluar.
-    routes['api.groq.com'] = () =>
+    routes['api.mistral.ai'] = () =>
       respond(200, { choices: [{ message: { content: 'ok' } }] });
 
-    const res = await worker.fetch(chatRequest(), envWith({ GROQ_API_KEY: 'gq-key' }));
+    const res = await worker.fetch(chatRequest(), envWith({ MISTRAL_API_KEY: 'm-key' }));
 
     expect(res.status).toBe(200);
-    expect((await res.json())._provider).toBe('groq');
-    expect(outboundCalls).toEqual(['api.groq.com']);
+    expect((await res.json())._provider).toBe('mistral');
+    expect(outboundCalls).toEqual(['api.mistral.ai']);
   });
 
   it('returns the last provider actual status and body when every provider fails', async () => {
     routes['openrouter.ai'] = () => respond(500, { marker: 'or' });
-    routes['api.groq.com'] = () => respond(503, { marker: 'gq' });
     routes['api.mistral.ai'] = () => respond(500, { marker: 'mi' });
     // SambaNova ada di rantai DEFAULT-nya sudah dikeluarkan (butuh billing):
     // routenya sengaja disiapkan — kalau ikut terpanggil, test ini gagal.
+    // Route groq juga disiapkan: Groq tidak boleh sama sekali menerima chat.
     routes['api.sambanova.ai'] = () => respond(500, { marker: 'sn' });
+    routes['api.groq.com'] = () => respond(500, { marker: 'gq' });
 
     const res = await worker.fetch(
       chatRequest(),
@@ -229,21 +230,21 @@ describe('chat provider fallback chain (Task #005, #014)', () => {
 
     expect(res.status).toBe(500);
     expect(await res.text()).toContain('"marker":"mi"');
-    expect(outboundCalls).toEqual(['openrouter.ai', 'api.groq.com', 'api.mistral.ai']);
+    expect(outboundCalls).toEqual(['openrouter.ai', 'api.mistral.ai']);
   });
 
   it('honours a forced provider and never touches the rest of the chain', async () => {
-    routes['api.groq.com'] = () =>
-      respond(200, { choices: [{ message: { content: 'jawaban groq' } }] });
+    routes['api.mistral.ai'] = () =>
+      respond(200, { choices: [{ message: { content: 'jawaban mistral' } }] });
 
     const res = await worker.fetch(
-      chatRequest({ messages: [], provider: 'groq' }),
-      envWith({ OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2' }),
+      chatRequest({ messages: [], provider: 'mistral' }),
+      envWith({ OPENROUTER_API_KEY: 'k1', MISTRAL_API_KEY: 'k3' }),
     );
 
     expect(res.status).toBe(200);
-    expect((await res.json())._provider).toBe('groq');
-    expect(outboundCalls).toEqual(['api.groq.com']);
+    expect((await res.json())._provider).toBe('mistral');
+    expect(outboundCalls).toEqual(['api.mistral.ai']);
   });
 
   it('rejects an unknown forced provider with 500 and makes no outbound call', async () => {
@@ -254,6 +255,23 @@ describe('chat provider fallback chain (Task #005, #014)', () => {
 
     expect(res.status).toBe(500);
     expect(outboundCalls).toEqual([]);
+  });
+
+  it('rejects provider:groq for chat (arahan 2026-09-28: Groq khusus STT) with zero outbound calls', async () => {
+    // GROQ_API_KEY sengaja di-set: penolakan murni kebijakan, bukan karena
+    // konfigurasi kurang — text chat tidak boleh pernah mengarah ke Groq.
+    const res = await worker.fetch(
+      chatRequest({ messages: [], provider: 'groq' }),
+      envWith({
+        OPENROUTER_API_KEY: 'k1',
+        GROQ_API_KEY: 'gq-key',
+        MISTRAL_API_KEY: 'k3',
+        SAMBANOVA_API_KEY: 'k4',
+      }),
+    );
+
+    expect(res.status).toBe(500);
+    expect(outboundCalls).toEqual([]); // groq tidak pernah menerima text chat
   });
 
   it('returns 500 without throwing when no provider has an API key set', async () => {
@@ -269,28 +287,28 @@ describe('chat provider fallback chain (Task #005, #014)', () => {
     // rantai harus memperlakukannya seperti gagal dan lanjut ke berikutnya.
     routes['openrouter.ai'] = () =>
       respond(429, { error: { message: 'Rate limit exceeded for model' } });
-    routes['api.groq.com'] = () =>
-      respond(200, { choices: [{ message: { content: 'jawaban groq' } }] });
+    routes['api.mistral.ai'] = () =>
+      respond(200, { choices: [{ message: { content: 'jawaban mistral' } }] });
 
     const res = await worker.fetch(
       chatRequest(),
-      envWith({ OPENROUTER_API_KEY: 'or-key', GROQ_API_KEY: 'gq-key' }),
+      envWith({ OPENROUTER_API_KEY: 'or-key', MISTRAL_API_KEY: 'm-key' }),
     );
 
     expect(res.status).toBe(200);
-    expect((await res.json())._provider).toBe('groq');
-    expect(outboundCalls).toEqual(['openrouter.ai', 'api.groq.com']);
+    expect((await res.json())._provider).toBe('mistral');
+    expect(outboundCalls).toEqual(['openrouter.ai', 'api.mistral.ai']);
   });
 
   it('returns the last provider actual 429 status and body when every provider rate-limits', async () => {
-    // Tiga 429 berurutan: klien menerima 429 asli dari provider terakhir
-    // di rantai (Mistral) — bukan 500 generik. Route SambaNova disiapkan
-    // tanpa sengaja: kalau rantai masih memanggilnya, marker 'sn' muncul
-    // dan outboundCalls melebihi tiga → test gagal.
+    // Dua 429 berurutan: klien menerima 429 asli dari provider terakhir
+    // di rantai (Mistral) — bukan 500 generik. Route SambaNova & Groq
+    // disiapkan tanpa sengaja: kalau rantai masih memanggilnya, marker
+    // 'sn'/'gq' muncul dan outboundCalls melebihi dua → test gagal.
     routes['openrouter.ai'] = () => respond(429, { marker: 'or' });
-    routes['api.groq.com'] = () => respond(429, { marker: 'gq' });
     routes['api.mistral.ai'] = () => respond(429, { marker: 'mi' });
     routes['api.sambanova.ai'] = () => respond(429, { marker: 'sn' });
+    routes['api.groq.com'] = () => respond(429, { marker: 'gq' });
 
     const res = await worker.fetch(
       chatRequest(),
@@ -304,20 +322,20 @@ describe('chat provider fallback chain (Task #005, #014)', () => {
 
     expect(res.status).toBe(429);
     expect(await res.text()).toContain('"marker":"mi"');
-    expect(outboundCalls).toEqual(['openrouter.ai', 'api.groq.com', 'api.mistral.ai']);
+    expect(outboundCalls).toEqual(['openrouter.ai', 'api.mistral.ai']);
   });
 
   it('passes a 429 through unchanged when a forced provider rate-limits (chain skipped)', async () => {
-    routes['api.groq.com'] = () => respond(429, { marker: 'forced-gq' });
+    routes['api.mistral.ai'] = () => respond(429, { marker: 'forced-mi' });
 
     const res = await worker.fetch(
-      chatRequest({ messages: [], provider: 'groq' }),
-      envWith({ OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2' }),
+      chatRequest({ messages: [], provider: 'mistral' }),
+      envWith({ OPENROUTER_API_KEY: 'k1', MISTRAL_API_KEY: 'k3' }),
     );
 
     expect(res.status).toBe(429);
-    expect(await res.text()).toContain('"marker":"forced-gq"');
-    expect(outboundCalls).toEqual(['api.groq.com']);
+    expect(await res.text()).toContain('"marker":"forced-mi"');
+    expect(outboundCalls).toEqual(['api.mistral.ai']);
   });
 
   it('advances to the next provider when a 200 response carries no usable content (hotfix)', async () => {
@@ -325,184 +343,54 @@ describe('chat provider fallback chain (Task #005, #014)', () => {
     // (teksnya di field reasoning) — bukan sukses, harus lanjut rantai.
     routes['openrouter.ai'] = () =>
       respond(200, { choices: [{ message: { content: null, reasoning: 'berpikir dulu' } }] });
-    routes['api.groq.com'] = () =>
-      respond(200, { choices: [{ message: { content: 'jawaban groq' } }] });
+    routes['api.mistral.ai'] = () =>
+      respond(200, { choices: [{ message: { content: 'jawaban mistral' } }] });
 
     const res = await worker.fetch(
       chatRequest(),
-      envWith({ OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2' }),
+      envWith({ OPENROUTER_API_KEY: 'k1', MISTRAL_API_KEY: 'k3' }),
     );
 
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data._provider).toBe('groq');
-    expect(data.choices[0].message.content).toBe('jawaban groq');
-    expect(outboundCalls).toEqual(['openrouter.ai', 'api.groq.com']);
+    expect(data._provider).toBe('mistral');
+    expect(data.choices[0].message.content).toBe('jawaban mistral');
+    expect(outboundCalls).toEqual(['openrouter.ai', 'api.mistral.ai']);
   });
 
   it('passes the last 200 body through unchanged when every answer is unusable (hotfix)', async () => {
     routes['openrouter.ai'] = () =>
       respond(200, { choices: [{ message: { content: null } }], marker: 'or' });
-    routes['api.groq.com'] = () =>
-      respond(200, { choices: [{ message: { content: null } }], marker: 'gq' });
+    routes['api.mistral.ai'] = () =>
+      respond(200, { choices: [{ message: { content: null } }], marker: 'mi' });
 
     const res = await worker.fetch(
       chatRequest(),
-      envWith({ OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2' }),
+      envWith({ OPENROUTER_API_KEY: 'k1', MISTRAL_API_KEY: 'k3' }),
     );
 
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(text).toContain('"marker":"gq"'); // badan provider terakhir, utuh
+    expect(text).toContain('"marker":"mi"'); // badan provider terakhir, utuh
     expect(text).not.toContain('"marker":"or"');
     expect(text).not.toContain('_provider'); // bukan respons sukses → tanpa pembungkus
     expect(res.headers.get('Content-Type')).toContain('application/json');
-    expect(outboundCalls).toEqual(['openrouter.ai', 'api.groq.com']);
+    expect(outboundCalls).toEqual(['openrouter.ai', 'api.mistral.ai']);
   });
 
   it('passes a forced provider 200 body through unchanged when its content is unusable (hotfix)', async () => {
-    routes['api.groq.com'] = () => respond(200, { choices: [{ message: { content: null } }] });
+    routes['api.mistral.ai'] = () => respond(200, { choices: [{ message: { content: null } }] });
 
     const res = await worker.fetch(
-      chatRequest({ messages: [], provider: 'groq' }),
-      envWith({ OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2' }),
+      chatRequest({ messages: [], provider: 'mistral' }),
+      envWith({ OPENROUTER_API_KEY: 'k1', MISTRAL_API_KEY: 'k3' }),
     );
 
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.choices[0].message.content).toBeNull();
     expect(data._provider).toBeUndefined(); // gagal → badan asli apa adanya
-    expect(outboundCalls).toEqual(['api.groq.com']);
-  });
-
-  it('sends a chat-capable Groq default model when the client omits model (regression)', async () => {
-    let sentModel = null;
-    globalThis.fetch = async (url, init) => {
-      sentModel = JSON.parse(init.body).model;
-      return respond(200, { choices: [{ message: { content: 'ok' } }] });
-    };
-
-    const res = await worker.fetch(
-      chatRequest({ messages: [] }),
-      envWith({ GROQ_API_KEY: 'gq-key' }),
-    );
-
-    expect(res.status).toBe(200);
-    expect(sentModel).toBe('openai/gpt-oss-120b'); // bukan whisper/tts — model chat beneran
-  });
-
-  it('recovers from a retired Groq default model via GET /models (hotfix)', async () => {
-    const calls = [];
-    let chatSeq = 0;
-    let retriedModel = null;
-    globalThis.fetch = async (url, init) => {
-      const u = new URL(url);
-      calls.push(`${u.hostname}${u.pathname}`);
-      if (u.pathname.endsWith('/models')) {
-        return respond(200, {
-          data: [
-            { id: 'whisper-large-v3-turbo', active: true },
-            { id: 'openai/gpt-oss-20b', active: true },
-          ],
-        });
-      }
-      chatSeq += 1;
-      if (chatSeq === 1) {
-        return respond(404, {
-          error: {
-            message: 'The model does not exist or you do not have access to it.',
-            code: 'model_not_found',
-          },
-        });
-      }
-      retriedModel = JSON.parse(init.body).model;
-      return respond(200, { choices: [{ message: { content: 'dari model pengganti' } }] });
-    };
-
-    const res = await worker.fetch(chatRequest(), envWith({ GROQ_API_KEY: 'gq-key' }));
-
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data._provider).toBe('groq');
-    expect(data.choices[0].message.content).toBe('dari model pengganti');
-    expect(retriedModel).toBe('openai/gpt-oss-20b'); // whisper dibuang, production dipilih
-    expect(calls).toEqual([
-      'api.groq.com/openai/v1/chat/completions',
-      'api.groq.com/openai/v1/models',
-      'api.groq.com/openai/v1/chat/completions',
-    ]);
-  });
-
-  it('advances to the next provider when GET /models also fails (no silent loop)', async () => {
-    const calls = [];
-    globalThis.fetch = async (url) => {
-      const u = new URL(url);
-      calls.push(`${u.hostname}${u.pathname}`);
-      if (u.hostname === 'api.groq.com') {
-        if (u.pathname.endsWith('/models')) return respond(500, { marker: 'models-down' });
-        return respond(404, { error: { code: 'model_not_found' } });
-      }
-      return respond(200, { choices: [{ message: { content: 'jawaban mistral' } }] });
-    };
-
-    const res = await worker.fetch(
-      chatRequest(),
-      envWith({ GROQ_API_KEY: 'gq-key', MISTRAL_API_KEY: 'm-key' }),
-    );
-
-    expect(res.status).toBe(200);
-    expect((await res.json())._provider).toBe('mistral');
-    expect(calls).toEqual([
-      'api.groq.com/openai/v1/chat/completions',
-      'api.groq.com/openai/v1/models',
-      'api.mistral.ai/v1/chat/completions',
-    ]);
-  });
-
-  it('treats a /models list with no usable chat model as no recovery', async () => {
-    const calls = [];
-    globalThis.fetch = async (url) => {
-      const u = new URL(url);
-      calls.push(`${u.hostname}${u.pathname}`);
-      if (u.hostname === 'api.groq.com') {
-        if (u.pathname.endsWith('/models')) {
-          return respond(200, { data: [{ id: 'whisper-large-v3-turbo', active: true }] });
-        }
-        return respond(404, { error: { code: 'model_not_found' } });
-      }
-      return respond(200, { choices: [{ message: { content: 'jawaban mistral' } }] });
-    };
-
-    const res = await worker.fetch(
-      chatRequest(),
-      envWith({ GROQ_API_KEY: 'gq-key', MISTRAL_API_KEY: 'm-key' }),
-    );
-
-    expect(res.status).toBe(200);
-    expect((await res.json())._provider).toBe('mistral');
-    expect(calls).toEqual([
-      'api.groq.com/openai/v1/chat/completions',
-      'api.groq.com/openai/v1/models',
-      'api.mistral.ai/v1/chat/completions',
-    ]);
-  });
-
-  it('skips model recovery when the client forces a model', async () => {
-    const calls = [];
-    globalThis.fetch = async (url) => {
-      const u = new URL(url);
-      calls.push(`${u.hostname}${u.pathname}`);
-      return respond(404, { error: { code: 'model_not_found', marker: 'forced-404' } });
-    };
-
-    const res = await worker.fetch(
-      chatRequest({ messages: [{ role: 'user', content: 'halo' }], model: 'model-pensiun' }),
-      envWith({ GROQ_API_KEY: 'gq-key' }),
-    );
-
-    expect(res.status).toBe(404);
-    expect(await res.text()).toContain('"marker":"forced-404"');
-    expect(calls).toEqual(['api.groq.com/openai/v1/chat/completions']); // tanpa /models
+    expect(outboundCalls).toEqual(['api.mistral.ai']);
   });
 });
 
@@ -713,20 +601,20 @@ describe('outbound timeout & security headers (Task #013)', () => {
 
   it('treats a hung provider as failed and falls back to the next one', async () => {
     routes['openrouter.ai'] = (_url, init) => hang(_url, init);
-    routes['api.groq.com'] = () =>
-      respond(200, { choices: [{ message: { content: 'jawaban groq' } }] });
+    routes['api.mistral.ai'] = () =>
+      respond(200, { choices: [{ message: { content: 'jawaban mistral' } }] });
 
     const started = Date.now();
     const res = await worker.fetch(
       chatRequest(),
-      envWith({ OPENROUTER_API_KEY: 'or-key', GROQ_API_KEY: 'gq-key', CHAT_TIMEOUT_MS: '30' }),
+      envWith({ OPENROUTER_API_KEY: 'or-key', MISTRAL_API_KEY: 'm-key', CHAT_TIMEOUT_MS: '30' }),
     );
 
     expect(res.status).toBe(200);
-    expect((await res.json())._provider).toBe('groq');
+    expect((await res.json())._provider).toBe('mistral');
     expect(outboundCalls).toEqual([
       'openrouter.ai/api/v1/chat/completions',
-      'api.groq.com/openai/v1/chat/completions',
+      'api.mistral.ai/v1/chat/completions',
     ]);
     // Bukti tidak menggantung sampai default 15 dtk.
     expect(Date.now() - started).toBeLessThan(5000);
@@ -749,42 +637,46 @@ describe('outbound timeout & security headers (Task #013)', () => {
         headers: { 'Content-Type': 'application/json' },
       });
     };
-    routes['api.groq.com'] = () =>
-      respond(200, { choices: [{ message: { content: 'jawaban groq' } }] });
+    routes['api.mistral.ai'] = () =>
+      respond(200, { choices: [{ message: { content: 'jawaban mistral' } }] });
 
     const started = Date.now();
     const res = await worker.fetch(
       chatRequest(),
-      envWith({ OPENROUTER_API_KEY: 'or-key', GROQ_API_KEY: 'gq-key', CHAT_TIMEOUT_MS: '30' }),
+      envWith({ OPENROUTER_API_KEY: 'or-key', MISTRAL_API_KEY: 'm-key', CHAT_TIMEOUT_MS: '30' }),
     );
 
     expect(res.status).toBe(200);
-    expect((await res.json())._provider).toBe('groq');
+    expect((await res.json())._provider).toBe('mistral');
     expect(Date.now() - started).toBeLessThan(5000);
   });
 
   it('returns 504 when every keyed provider hangs without ever responding', async () => {
-    routes['api.groq.com'] = (_url, init) => hang(_url, init);
+    routes['openrouter.ai'] = (_url, init) => hang(_url, init);
+    routes['api.mistral.ai'] = (_url, init) => hang(_url, init);
 
     const res = await worker.fetch(
       chatRequest(),
-      envWith({ GROQ_API_KEY: 'gq-key', CHAT_TIMEOUT_MS: '30' }),
+      envWith({ OPENROUTER_API_KEY: 'k1', MISTRAL_API_KEY: 'k3', CHAT_TIMEOUT_MS: '30' }),
     );
 
     expect(res.status).toBe(504);
     expect(await res.text()).toContain('timeout');
-    expect(outboundCalls).toEqual(['api.groq.com/openai/v1/chat/completions']);
+    expect(outboundCalls).toEqual([
+      'openrouter.ai/api/v1/chat/completions',
+      'api.mistral.ai/v1/chat/completions',
+    ]);
   });
 
   it('keeps the last real provider error instead of masking it with 504', async () => {
-    // OpenRouter memberi error nyata (500) sebelum Groq hang: respons
+    // OpenRouter memberi error nyata (500) sebelum Mistral hang: respons
     // asli yang valid harus tetap diteruskan apa adanya.
     routes['openrouter.ai'] = () => respond(500, { marker: 'or' });
-    routes['api.groq.com'] = (_url, init) => hang(_url, init);
+    routes['api.mistral.ai'] = (_url, init) => hang(_url, init);
 
     const res = await worker.fetch(
       chatRequest(),
-      envWith({ OPENROUTER_API_KEY: 'k1', GROQ_API_KEY: 'k2', CHAT_TIMEOUT_MS: '30' }),
+      envWith({ OPENROUTER_API_KEY: 'k1', MISTRAL_API_KEY: 'k3', CHAT_TIMEOUT_MS: '30' }),
     );
 
     expect(res.status).toBe(500);

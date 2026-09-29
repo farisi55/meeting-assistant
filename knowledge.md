@@ -1,6 +1,6 @@
 ---
 project: meeting-assistant
-version: 1.0.14
+version: 1.0.15
 source: prd
 last_updated: 2026-09-28
 project_shape: fullstack
@@ -87,8 +87,16 @@ external_assets: false
   - Cloudflare Workers over a traditional VPS/Node server — meets the
     100%-free hard constraint without losing a local-run option
     (`wrangler dev` reads `.dev.vars` exactly like `.env`)
-  - Provider fallback chain (4 free LLM providers) over topping up
-    OpenRouter credit — clears the 50-req/day free-tier cap at zero cost
+  - Provider fallback chain (OpenRouter → Mistral) over topping up
+    OpenRouter credit — a second free provider keeps chat alive when
+    OpenRouter hits its 50-req/day cap or times out, at zero cost
+    (SambaNova joins the chain once billing is enabled)
+  - Groq reserved for Whisper STT only (directive 2026-09-28, amending
+    the brief's CORE FEATURES #6 which had listed Groq in the chat
+    chain): `/api/chat` never sends text to Groq — Groq is absent from
+    `PROVIDERS`, forced `provider: 'groq'` is rejected like an unknown
+    provider (500, zero outbound calls), and the Groq model-recovery
+    code was removed together with its chat path
   - Non-streaming chat responses over SSE streaming — lets each
     provider's status be checked before falling back to the next one;
     trade-off is no live token-by-token display
@@ -142,8 +150,10 @@ external_assets: false
 - Request / response schemas:
   - `POST /api/chat` — request: `{ messages, provider?, model?,
     temperature?, max_tokens? }`. `provider` (optional) forces one of
-    `openrouter | groq | mistral | sambanova`, skipping the fallback
-    chain. Response: passthrough from the upstream provider (OpenAI-
+    `openrouter | mistral | sambanova`, skipping the fallback chain.
+    `groq` is deliberately NOT accepted for chat (Groq is STT-only) and
+    behaves exactly like an unknown provider: 500, zero outbound calls.
+    Response: passthrough from the upstream provider (OpenAI-
     compatible `{choices, usage, ...}`) plus a `_provider` field naming
     which provider answered.
   - `POST /api/transcribe` — request: multipart form-data `{ file,
@@ -170,12 +180,6 @@ external_assets: false
   unusable, the last actual 200 body is passed through unchanged and the
   client surfaces its shape error (`choices[0].message.content +
   _provider`)
-  Local exception (Groq model recovery): when Groq's default model
-  answers 404 (`model_not_found`, e.g. after a model retirement) and the
-  request did not force `model`, the Worker GETs `/openai/v1/models` and
-  retries Groq once with an active non-audio replacement (known
-  production IDs preferred); if that list fetch or the retry fails, the
-  chain advances exactly as without recovery
 - Pagination: none
 
 ## 6. UI / UX Constraints
@@ -301,8 +305,9 @@ external_assets: false
     `defineConfig`/`defineProject` from `vitest/config`
   - OpenRouter `:free` models: 20 req/min; 50 req/day if no credit ever
     purchased, 1,000 req/day after purchasing ≥10 credits once
-  - Groq: chat 20 req/min & 2,000 req/day; Whisper 20 req/min, 2,000
-    req/day, ~8 hours of audio/day
+  - Groq: Whisper 20 req/min, 2,000 req/day, ~8 hours of audio/day
+    (chat limits — 20 req/min & 2,000 req/day — archived: Groq left
+    the chat path entirely on 2026-09-28)
   - Mistral La Plateforme free tier: ~1 req/sec (verify current limit on
     their dashboard)
   - SambaNova Cloud free tier: exact request limits unverified — check
@@ -312,8 +317,8 @@ external_assets: false
     billing is enabled)
   - Groq retired `llama-3.3-70b-versatile` and `llama-3.1-8b-instant`
     for free/developer tiers on 2026-08-16 → 404 `model_not_found`;
-    `PROVIDERS.groq.defaultModel` now uses `openai/gpt-oss-120b` (the
-    production-tier replacement)
+    historical only — Groq no longer appears in `PROVIDERS` at all
+    (STT-only since 2026-09-28)
   - `getDisplayMedia` system-audio capture only works fully in
     Chromium-based browsers (Chrome/Edge) on Windows/Linux/ChromeOS;
     Firefox and Safari do not forward audio this way; macOS only

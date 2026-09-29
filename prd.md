@@ -1,6 +1,6 @@
 ---
 doc_id: PRD-MEETING-ASSISTANT-001
-version: 1.0.2
+version: 1.0.3
 status: draft
 created: 2026-09-23
 flow_compatibility: vibe-coding-v1.7
@@ -45,7 +45,7 @@ project_shape: fullstack
 |---|---|---|
 | Audio capture (mic + audio sistem) | P0 — MVP | `getUserMedia` + `getDisplayMedia`, tanpa instalasi tambahan |
 | Transkripsi + terjemahan real-time | P0 — MVP | Via Groq Whisper, Indonesia ↔ Inggris |
-| Multi-provider LLM routing + fallback | P0 — MVP | OpenRouter → Groq → Mistral (SambaNova sementara keluar — free tier minta billing); sudah diimplementasikan |
+| Multi-provider LLM routing + fallback | P0 — MVP | OpenRouter → Mistral (SambaNova sementara keluar — free tier minta billing; Groq keluar total dari chat, khusus Whisper STT — amandemen 2026-09-28); sudah diimplementasikan |
 | Auth toggle | P0 — MVP | Basic Auth aktif hanya saat deployment publik; sudah diimplementasikan |
 | Bantu merangkai respons ("Steer AI") | P1 | User supply poin kasar, AI rapikan jadi kalimat fasih |
 | Upload konteks (CV/JD/product knowledge) | P1 | Personalisasi jawaban per mode |
@@ -226,12 +226,14 @@ project_shape: fullstack
   pindah ke provider gratis lain kalau satu provider kena limit, supaya
   asisten tetap bisa dipakai sepanjang hari tanpa biaya.
 - **Acceptance criteria:**
-  - [x] Worker mencoba provider sesuai `FALLBACK_ORDER` (OpenRouter → Groq →
+  - [x] Worker mencoba provider sesuai `FALLBACK_ORDER` (OpenRouter →
         Mistral; SambaNova sementara di luar rantai karena free tier-nya
         kini menuntut billing/402), lanjut ke provider berikutnya kalau
         respons non-2xx
   - [x] Provider tanpa API key ter-set dilewati otomatis tanpa error
   - [x] Client bisa memaksa satu provider spesifik lewat field `provider`
+  - [x] `provider: 'groq'` untuk chat ditolak 500 tanpa panggilan keluar
+        (Groq khusus Whisper STT — amandemen 2026-09-28)
   - [x] Response menyertakan metadata `_provider` supaya UI bisa
         menampilkan provider yang menjawab
 - **Business rules:** Urutan fallback dan model default per provider
@@ -436,8 +438,8 @@ project_shape: fullstack
 ### Known Third-Party Limitations
 - OpenRouter model `:free`: 20 request/menit; 50/hari (belum pernah beli
   credit) atau 1.000/hari (pernah beli ≥10 credit sekali)
-- Groq: chat 20 request/menit & 2.000/hari; Whisper 20 request/menit,
-  2.000/hari, ±8 jam audio/hari
+- Groq: Whisper 20 request/menit, 2.000/hari, ±8 jam audio/hari (limit
+  chat-nya tidak lagi relevan — Groq keluar dari jalur chat 2026-09-28)
 - Mistral La Plateforme: free tier tersedia, limit persis bervariasi
   (~1 request/detik) — cek dashboard langsung
 - SambaNova Cloud: free tier tanpa kartu kredit, limit request belum
@@ -456,7 +458,7 @@ project_shape: fullstack
 | Phase 1 | Foundation | Scaffolding, CI/CD, logging init, health endpoint, env var validation | Ya (health endpoint dikecualikan — lihat §6.5) |
 | Phase 2 | Domain & Data | Models, migrasi, soft-delete | **Tidak** — §4.1 Database: none |
 | Phase 3 | Core Features | Fitur P0 + unit test (Vitest) + API backward-compatible | Ya |
-| Phase 4 | Integration | OpenRouter/Groq/Mistral/SambaNova + fallback (tanpa webhook signature — tidak ada webhook masuk) | Ya |
+| Phase 4 | Integration | OpenRouter/Mistral/SambaNova + fallback, Groq Whisper STT (tanpa webhook signature — tidak ada webhook masuk) | Ya |
 | Phase 5 | UI/UX | Screens/components (vanilla JS) + XSS/output encoding | Ya — shape fullstack, ada UI |
 | Phase 6 | Testing & QA | Vitest + vitest-pool-workers, integration test jalur fallback | Ya, skala disesuaikan personal-use |
 | Phase 7 | Deployment | Cloudflare Workers, `wrangler deploy` | Ya, varian ringan — skip canary/staged rollout (§6.1 target 6 bulan = 1, jauh di bawah 1.000) |

@@ -1,7 +1,7 @@
 ---
 project: meeting-assistant
-knowledge_version: 1.0.14
-changelog_version: 1.0.21
+knowledge_version: 1.0.15
+changelog_version: 1.0.22
 created: 2026-09-23
 status: in_progress
 milestone: 1 of 1
@@ -645,3 +645,24 @@ simple_mode: true
 - **Regression:** Passed **139, 0 failed**; tidak ada feature flag.
 - **Notes:** Kontribusi pendukung dari kejadian ini: timeout 15 dtk OpenRouter pada payload meeting memang sengaja jatuh ke fallback (keputusan batch sebelumnya — dengan Groq sehat, chain tetap 200). Mistral 429 = kuota upstream, dibiarkan sebagai cadangan terakhir.
 - **Knowledge drift:** TIDAK ADA — tidak ada perubahan perilaku/struktur/kontrak; knowledge v1.0.14 tetap akurat (default Groq sudah terdokumentasi benar; kini dijaga regression test).
+
+### Ad-hoc — Groq Dikeluarkan Sepenuhnya dari `/api/chat` (Groq = Whisper STT saja) ✅
+- **Date:** 2026-09-29 (keputusan malam 2026-09-28)
+- **Status:** OK
+- **Branch:** dev (langsung, 1 commit)
+- **Keputusan:** Amandemen atas `developer-brief.md` **CORE FEATURES #6** (yang masih mencantumkan rantai OpenRouter → **Groq** → Mistral → SambaNova) — sesuai arahan user 2026-09-28, Groq dikeluarkan total dari chat dengan mode **strict**: bukan hanya dari rantai default, `provider: 'groq'` yang dipaksa pun wajib ditolak. CORE FEATURES **#2** (Transkripsi via Groq Whisper) tidak berubah. Alasan: Groq berharga karena Whisper STT gratis, bukan karena chat-nya.
+- **Perubahan:**
+  - `worker.js` — `PROVIDERS.groq` dihapus (objek kini openrouter/mistral/sambanova; `FALLBACK_ORDER = ['openrouter','mistral']`; sambanova dipertahankan di `PROVIDERS` untuk pemaksaan & pengembalian rantai setelah billing); `pickGroqReplacementModel` + hook pemulihan model Groq dihapus (alasan keberadaannya ikut hilang bersama Groq); penolakan `provider:'groq'` **tanpa kode baru** — jatuh ke jalur unknown-provider (`cfg` undefined → `continue` → 500 "Tidak ada provider…", nol panggilan keluar). `handleTranscribe` tidak lewat `PROVIDERS` (URL Whisper hard-coded + `env.GROQ_API_KEY` langsung) → STT tak tersentuh.
+  - `test/worker.test.js` — −5 test (4 pemulihan Groq + 1 regression `defaultModel` — keduanya spesifik Groq-chat), **+1 test penolakan**: `provider:'groq'` → 500 + `outboundCalls = []` dengan `GROQ_API_KEY` sengaja ter-set (penolakan kebijakan, bukan konfigurasi), ~12 test rantai/forced/timeout dialihkan alur groq → mistral (mekanika yang diuji identik).
+  - `test/integration.test.js` — mock E2E dialihkan ke `openrouter.ai` (`_provider: 'openrouter'`, header auth OpenRouter).
+  - `knowledge.md` — **1.0.14 → 1.0.15**: §1 (rantai baru + keputusan "Groq reserved for Whisper STT only" sebagai amandemen brief #6), §5 (enum `provider` tanpa `groq` + catatan penolakan; exception lokal "Groq model recovery" **dihapus**), §9 (limit Groq = Whisper saja — limit chat diarsipkan; catatan model retirement → historical saja).
+  - `README.md` — tabel `GROQ_API_KEY` (satu-satunya peran = transkripsi), tabel `defaultModel` tanpa baris Groq, deskripsi rantai + penjelasan amandemen, contoh forced provider → `mistral` (`groq` tidak valid).
+  - `prd.md` — **1.0.2 → 1.0.3**: tabel fitur (baris routing), AC fallback (+ AC baru penolakan `provider:'groq'`), Known Third-Party Limitations (Groq = Whisper saja), tabel Phase 4.
+  - `changelog.md` — entri ini; frontmatter `knowledge_version` 1.0.14 → **1.0.15**, `changelog_version` 1.0.21 → **1.0.22**.
+- **Verifikasi:**
+  - `npm test`: **135 passed, 0 failed, 13 files** (139 − 5 dihapus + 1 baru).
+  - Mutasi ×2 — **2 dari 2 tertangkap**: M1 (groq kembali masuk `PROVIDERS` + `FALLBACK_ORDER`) → 3 test gagal; M2 (hanya `PROVIDERS`) → 1 test gagal (penolakan groq); kedua mutasi di-revert → suite hijau; nol marker `MUTASI` tersisa.
+  - Live `wrangler dev`: `/api/transcribe` → **200 Groq Whisper** (`x_groq.id` ada); `/api/chat` payload meeting tanpa `provider` → **200 `_provider: 'openrouter'`** (5,4 dtk); `/api/chat` `provider:'groq'` → **500** tanpa panggilan keluar.
+- **Regression:** Passed **135, 0 failed**; tidak ada feature flag.
+- **Notes / risiko diterima:** rantai kini hanya **2 provider** (openrouter → mistral). Mistral 429 (kuota free tier, terverifikasi hari ini) + OpenRouter 50 req/hari & timeout 15 dtk → respons 429 di UI **bisa muncul lagi tanpa penyelamat ketiga**; jalur pengembalian SambaNova setelah billing aktif tidak berubah (`PROVIDERS` tetap memuatnya). Frontend tak pernah mengirim `provider` (hanya test yang memaksa); mock `_provider: 'groq'` di test frontend bersifat agnostik-display — sengaja tidak diubah. `developer-brief.md` tidak diedit (input artefak). Insiden lingkungan saat verifikasi: dua pohon `wrangler dev` berebut port 8787 (satu sesi lama dari `npm run dev`) → dibersihkan jadi 1 instance; angka 500 "tanpa key" awal ternyata payload uji lokal yang sendiri memaksa `provider:'groq'` — perilaku benar, bukan bug.
+- **Knowledge drift:** UPDATE REQUIRED — **diterapkan**: §1/§5/§9 seperti daftar Perubahan; `knowledge_version` 1.0.14 → **1.0.15**. Trigger lain diperiksa: library (§2 — nol paket baru), naming (§4 — nol perubahan), API (§5 — skema response tak berubah; hanya enum input `provider` menyusut, sudah tercatat), infra (§8 — nol), delete strategy (§7 — nol), test isolation (§4 — pola `beforeEach`/`afterEach` lama dipakai ulang). Asset manifest: N/A (`external_assets: false`).

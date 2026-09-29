@@ -15,13 +15,13 @@ const IP = '198.51.100.7'; // IP tes khusus, beda dengan 203.0.113.9 di worker.t
 const LOCK_KEY = `authfail:${IP}`;
 
 // Env sintetis per test — AUTH_KV memakai binding KV asli dari runtime
-// supaya mekanisme lockout diuji apa adanya; GROQ_API_KEY diset supaya jalur
-// chat hidup, openrouter tetap dilewati (key-nya tidak ada) seperti produksi.
+// supaya mekanisme lockout diuji apa adanya; OPENROUTER_API_KEY diset supaya
+// jalur chat hidup, mistral dilewati (key-nya tidak ada) seperti produksi.
 const makeEnv = (overrides = {}) => ({
   AUTH_ENABLED: 'true',
   BASIC_AUTH_TOKEN: TOKEN,
   AUTH_KV: env.AUTH_KV,
-  GROQ_API_KEY: 'e2e-groq-key-not-a-secret',
+  OPENROUTER_API_KEY: 'e2e-openrouter-key-not-a-secret',
   ASSETS: { fetch: async () => new Response('asset-ok') },
   ...overrides,
 });
@@ -85,8 +85,8 @@ describe('end-to-end: auth -> /api/chat -> provider (Task #016)', () => {
   });
 
   it('returns the mocked provider response end-to-end with security headers', async () => {
-    routes['api.groq.com'] = () =>
-      respond(200, { choices: [{ message: { content: 'Halo dari Groq' } }] });
+    routes['openrouter.ai'] = () =>
+      respond(200, { choices: [{ message: { content: 'Halo dari OpenRouter' } }] });
 
     const res = await worker.fetch(
       chatRequest({ Authorization: `Bearer ${TOKEN}`, 'CF-Connecting-IP': IP }),
@@ -96,14 +96,16 @@ describe('end-to-end: auth -> /api/chat -> provider (Task #016)', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toContain('application/json');
     const data = await res.json();
-    expect(data._provider).toBe('groq');
-    expect(data.choices[0].message.content).toBe('Halo dari Groq');
+    expect(data._provider).toBe('openrouter');
+    expect(data.choices[0].message.content).toBe('Halo dari OpenRouter');
 
-    // Tepat satu panggilan keluar: ke Groq, dengan kredensial env yang
-    // benar, payload messages diteruskan apa adanya.
+    // Tepat satu panggilan keluar: ke OpenRouter (provider pertama rantai),
+    // dengan kredensial env yang benar, payload messages diteruskan apa adanya.
     expect(outboundCalls).toHaveLength(1);
-    expect(outboundCalls[0].url).toBe('https://api.groq.com/openai/v1/chat/completions');
-    expect(outboundCalls[0].init.headers.Authorization).toBe('Bearer e2e-groq-key-not-a-secret');
+    expect(outboundCalls[0].url).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(outboundCalls[0].init.headers.Authorization).toBe(
+      'Bearer e2e-openrouter-key-not-a-secret',
+    );
     const sent = JSON.parse(outboundCalls[0].init.body);
     expect(sent.messages).toEqual([{ role: 'user', content: 'halo' }]);
     expect(sent.stream).toBe(false);

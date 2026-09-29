@@ -19,7 +19,7 @@ cp .dev.vars.example .dev.vars   # lalu isi nilai asli
 
 | Variabel di `.dev.vars` | Untuk apa |
 |---|---|
-| `GROQ_API_KEY` | Transkripsi audio (`POST /api/transcribe`, Whisper) |
+| `GROQ_API_KEY` | Transkripsi audio (`POST /api/transcribe`, Whisper) — **satu-satunya peran Groq**; `/api/chat` menolak `provider: 'groq'` |
 | `OPENROUTER_API_KEY` | Chat — provider pertama di rantai fallback |
 | `MISTRAL_API_KEY` | Chat — fallback kedua |
 | `SAMBANOVA_API_KEY` | Chat — **keluar dari rantai default** (free tier minta billing/402); masih bisa dipaksa via `provider: 'sambanova'` |
@@ -42,33 +42,33 @@ wrangler secret put GROQ_API_KEY        # ulangi untuk key lainnya
 
 ### 2. URL & model provider — TIDAK perlu dikonfigurasi
 
-baseUrl dan model default tiap provider sudah hardcoded di konstanta
+baseUrl dan model default tiap provider chat sudah hardcoded di konstanta
 `PROVIDERS` (`worker.js`):
 
 | Provider | baseUrl | defaultModel |
 |---|---|---|
 | openrouter | `https://openrouter.ai/api/v1` | `openrouter/free` |
-| groq | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` |
 | mistral | `https://api.mistral.ai/v1` | `mistral-small-latest` |
 | sambanova | `https://api.sambanova.ai/v1` | `Meta-Llama-3.3-70B-Instruct` |
 
-**Pemulihan otomatis model Groq:** kalau model default menjawab 404
-(`model_not_found` — mis. dimatikan Groq seperti kasus Agu 2026) dan
-request tidak memaksa `model`, Worker otomatis `GET /openai/v1/models`,
-memilih model chat aktif pengganti, lalu mengulangi Groq pada request
-yang sama. Kalau daftar itu pun gagal, rantai fallback lanjut seperti
-biasa — tidak ada loop.
+**Groq tidak ada di `PROVIDERS` chat** — Groq khusus Whisper STT (brief
+CORE FEATURES #2; amandemen 2026-09-28 atas #6 yang semula memasukkannya
+ke rantai chat). Kirim `provider: 'groq'` ke `/api/chat` = 500 tanpa
+panggilan keluar, sama seperti provider tak dikenal.
 
 Urutan percobaan saat provider error/limit: `FALLBACK_ORDER` (openrouter →
-groq → mistral). SambaNova sengaja tidak ikut rantai — free tier-nya kini
+mistral). SambaNova sengaja tidak ikut rantai — free tier-nya kini
 menuntut metode pembayaran (402); aktifkan billing lalu kembalikan ke
-`FALLBACK_ORDER` di `worker.js` bila diperlukan.
+`FALLBACK_ORDER` di `worker.js` bila diperlukan. Rantai kini hanya dua
+provider: saat OpenRouter limit/timeout dan Mistral sedang 429, memang
+tidak ada cadangan lagi.
 
 **Override bila perlu:**
 
 - **Per request (chat)** — kirim field opsional `provider` dan/atau `model`
   di body `/api/chat` untuk memaksa satu provider/model, melewati fallback
-  chain. Lewat helper frontend: `chat(messages, { provider: 'groq', model: '...' })`.
+  chain. Lewat helper frontend: `chat(messages, { provider: 'mistral', model: '...' })`.
+  (`groq` tidak valid untuk chat — lihat catatan di atas.)
 - **Per request (transcribe)** — field form `model` / `language`
   (default: `whisper-large-v3-turbo`, `id`).
 - **Permanen** — ubah objek `PROVIDERS` / `FALLBACK_ORDER` di `worker.js`
